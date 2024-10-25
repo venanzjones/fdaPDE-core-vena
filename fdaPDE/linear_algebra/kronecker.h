@@ -46,6 +46,8 @@ struct KroneckerTensorProduct<Lhs, Rhs, Eigen::Dense, Eigen::Dense> :
     public Eigen::MatrixBase<KroneckerTensorProduct<Lhs, Rhs, Eigen::Dense, Eigen::Dense>>,
     public KroneckerTensorProductBase<KroneckerTensorProduct<Lhs, Rhs, Eigen::Dense, Eigen::Dense>> {
     using Base = KroneckerTensorProductBase<KroneckerTensorProduct<Lhs, Rhs, Eigen::Dense, Eigen::Dense>>;
+    using Base::cols;
+    using Base::rows;
     KroneckerTensorProduct(const Lhs& lhs, const Rhs& rhs) : Base(lhs, rhs) {};
 };
 template <typename Lhs, typename Rhs>
@@ -60,6 +62,8 @@ struct KroneckerTensorProduct<Lhs, Rhs, Eigen::Sparse, Eigen::Sparse> :
     public Eigen::SparseMatrixBase<KroneckerTensorProduct<Lhs, Rhs, Eigen::Sparse, Eigen::Sparse>>,
     public KroneckerTensorProductBase<KroneckerTensorProduct<Lhs, Rhs, Eigen::Sparse, Eigen::Sparse>> {
     using Base = KroneckerTensorProductBase<KroneckerTensorProduct<Lhs, Rhs, Eigen::Sparse, Eigen::Sparse>>;
+    using Base::cols;
+    using Base::rows;
     KroneckerTensorProduct(const Lhs& lhs, const Rhs& rhs) : Base(lhs, rhs) {};
 };
 template <typename Lhs, typename Rhs>
