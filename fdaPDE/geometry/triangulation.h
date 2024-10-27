@@ -91,7 +91,10 @@ template <int M, int N, typename Derived> class TriangulationBase {
     int n_nodes() const { return n_nodes_; }
     int n_boundary_nodes() const { return nodes_markers_.count(); }
     SMatrix<2, N> range() const { return range_; }
-
+    double measure() const {
+        return std::accumulate(
+          cells_begin(), cells_end(), 0.0, [](double v, const auto& e) { return v + e.measure(); });
+    }
     // iterators over cells (possibly filtered by marker)
     class cell_iterator : public internals::filtering_iterator<cell_iterator, const CellType*> {
         using Base = internals::filtering_iterator<cell_iterator, const CellType*>;
