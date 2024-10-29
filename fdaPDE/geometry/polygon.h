@@ -29,27 +29,54 @@ template <int LocalDim, int EmbedDim> class Polygon {
    public:
     static constexpr int local_dim = LocalDim;
     static constexpr int embed_dim = EmbedDim;
-  
-    Polygon() noexcept = default;
-    Polygon(const DMatrix<double>& nodes) noexcept {
-      // perform monotone partitioning
-      DCEL<local_dim, embed_dim> dcel = monotone_partition(nodes);
-      // recover from the DCEL structure the node numbering of each monotone polygon
-      std::vector<bool> visited(dcel.n_halfedges());
-      
 
-      // triangulate(nodes);
+    // constructors
+    Polygon() noexcept = default;
+    Polygon(const DMatrix<double>& nodes) noexcept : triangulation_() { triangulate_(nodes); }
+    Polygon(const Polygon&) noexcept = default;
+    Polygon(Polygon&&) noexcept = default;  
+    // observers
+    const DMatrix<double>& nodes() const { return triangulation_.nodes(); }
+    const DMatrix<int, Eigen::RowMajor>& cells() const { return triangulation_.cells(); }
+    const Triangulation<local_dim, embed_dim>& triangulation() const { return triangulation_; }
+    double measure() const { return triangulation_.measure(); }
+    int n_nodes() const { return triangulation_.n_nodes(); }
+    int n_cells() const { return triangulation_.n_cells(); }
+    int n_edges() const { return triangulation_.n_edges(); }
+    // point location
+    template <int Rows, int Cols>
+    std::conditional_t<Rows == Dynamic || Cols == Dynamic, DVector<int>, int>
+    locate(const Eigen::Matrix<double, Rows, Cols>& p) const {
+        return triangulation_.locate(p);
     }
-  
-    // measure
-    // contains
-    // circulator on boundary nodes
-    // triangulation (return refernce to underling triangulation object)
-    // assumption: nodes are sorted in counterclocwise order (TODO: perform a check of this assumption)
+    // test whether point p is contained in polygon
+    template <int Rows, int Cols>
+        requires((Rows == embed_dim && Cols == 1) || (Cols == embed_dim && Rows == 1))
+    bool contains(const Eigen::Matrix<double, Rows, Cols>& p) const {
+        return triangulation_.locate(p) != -1;
+    }
+   private:
+    // perform polygon triangulation
+    void triangulate_(const DMatrix<double>& nodes) {
+        std::vector<int> cells;
+        // perform monotone partitioning
+        std::vector<std::vector<int>> poly_partition = monotone_partition_(nodes);
+        // triangulate each monotone polygon
+        for (const std::vector<int>& poly : poly_partition) {
+            std::vector<int> local_cells = triangulate_monotone_(nodes(poly, Eigen::all));
+            // move local node numbering to global node numbering
+            for (std::size_t i = 0; i < local_cells.size(); ++i) { local_cells[i] = poly[local_cells[i]]; }
+            cells.insert(cells.end(), local_cells.begin(), local_cells.end());
+        }
+        // set-up face-based data structure
+        triangulation_ = Triangulation<LocalDim, EmbedDim>(
+          nodes, Eigen::Map<DMatrix<int, Eigen::RowMajor>>(cells.data(), cells.size() / 3, 3),
+          DVector<int>::Ones(nodes.rows()));
+    }
 
     // partition an arbitrary polygon P into a set of monotone polygons (plane sweep approach, section 3.2 of De Berg,
     // M. (2000). Computational geometry: algorithms and applications. Springer Science & Business Media.)
-    DCEL<local_dim, embed_dim> monotone_partition(const DMatrix<double>& nodes) {
+    std::vector<std::vector<int>> monotone_partition_(const DMatrix<double>& nodes) {
         using poly_t = DCEL<local_dim, embed_dim>;
         using node_t = typename poly_t::node_t;
         using edge_t = typename poly_t::edge_t;
@@ -211,10 +238,27 @@ template <int LocalDim, int EmbedDim> class Polygon {
             }
             }
         }
-	return poly;
+        // recover from the DCEL structure the node numbering of each monotone polygon
+        std::vector<bool> visited(poly.n_halfedges(), false);
+        std::vector<std::vector<int>> monotone_partition;
+        auto collect_polygon_node_id_from = [&]<typename halfedge_t>(halfedge_t* chain) mutable {
+            auto& it = monotone_partition.emplace_back();
+            for (auto jt = poly.halfedge_begin(chain); jt != poly.halfedge_end(chain); ++jt) {
+                int node_id = jt->node()->id();
+                it.push_back(node_id);
+                visited[jt->id()] = true;
+            }
+        };
+        for (edge_ptr_t diagonal : diagonals) {
+            // follow the chains from the halfedges composing this edge, if halfedge not already visited
+            if (!visited[diagonal->first() ->id()]) { collect_polygon_node_id_from(diagonal->first ()); }
+            if (!visited[diagonal->second()->id()]) { collect_polygon_node_id_from(diagonal->second()); }
+        }
+        return monotone_partition;
     }
 
-    void triangulate_monotone(const DMatrix<double>& nodes) {
+    // triangulate monotone polygon (returns a RowMajor ordered matrix of cells).
+    std::vector<int> triangulate_monotone_(const DMatrix<double>& nodes) {
         // every triangulation of a polygon of n points has n - 2 triangles (lemma 1.2.2 of (1))
         std::vector<int> cells;
 	int n_nodes = nodes.rows();
@@ -226,7 +270,7 @@ template <int LocalDim, int EmbedDim> class Polygon {
         };
         if (nodes.rows() == 3) {   // already a triangle, stop
             push_cell(0, 1, 2);
-            return;
+            return cells;
         }
         // O(n) minimum and maximum coordinate search
         int min = nodes(0, 1) < nodes(1, 1) ? 0 : 1, max = nodes(0, 1) < nodes(1, 1) ? 1 : 0;
@@ -240,21 +284,27 @@ template <int LocalDim, int EmbedDim> class Polygon {
                 max = i;
             }
         }
-        // build right and left chains
-        std::vector<int> r_chain, l_chain;
-        for (int i = max; i != min; i = ((i - 1) % n_nodes + n_nodes) % n_nodes) { r_chain.push_back(i); }
-        for (int i = (max + 1) % n_nodes, n = (min + 1) % n_nodes; i != n;
-             i = ((i + 1) % n_nodes + n_nodes) % n_nodes) {
-            l_chain.push_back(i);
+        // build right and left chains (assume counterclockwise sorting)
+	std::vector<int> node(n_nodes);
+	std::unordered_set<int> r_chain, l_chain;
+        {
+            std::vector<int> r_chain_, l_chain_;
+            for (int j = max; j != min; j = ((j + 1) % n_nodes + n_nodes) % n_nodes) { l_chain_.push_back(j); }
+            l_chain_.push_back(min);
+            for (int j = ((max - 1) % n_nodes + n_nodes) % n_nodes; j != min;
+                 j = ((j - 1) % n_nodes + n_nodes) % n_nodes) {
+                r_chain_.push_back(j);
+            }
+            // O(n) sorted list merge
+            std::merge(
+              l_chain_.begin(), l_chain_.end(), r_chain_.begin(), r_chain_.end(), node.begin(), [&](int a, int b) {
+                  return nodes(a, 1) > nodes(b, 1) || (nodes(a, 1) == nodes(b, 1) && nodes(a, 0) > nodes(b, 0));
+              });
+            l_chain.insert(l_chain_.begin(), l_chain_.end());
+            r_chain.insert(r_chain_.begin(), r_chain_.end());
         }
-        // O(n) sorted list merge
-        std::vector<int> node(n_nodes);
-        std::merge(l_chain.begin(), l_chain.end(), r_chain.begin(), r_chain.end(), node.begin(), [&](int a, int b) {
-	  return nodes(a, 1) > nodes(b, 1) || (nodes(a, 1) == nodes(b, 1) && nodes(a, 0) > nodes(b, 0));
-        });
-        // lambdas checking if a node is in the left or right chain
-        auto is_l_chain = [n = node.back(), m = node.size()](int i) { return i > n; };
-        auto is_r_chain = [n = node.back()](int i) { return i <= n; };
+        auto is_l_chain = [&](int i) { return l_chain.contains(i); };
+        auto is_r_chain = [&](int i) { return r_chain.contains(i); };
         auto are_in_opposite_chains = [&](int i, int j) -> bool {
             return (is_l_chain(i) && is_r_chain(j)) || (is_r_chain(i) && is_l_chain(j));
         };
@@ -267,6 +317,7 @@ template <int LocalDim, int EmbedDim> class Polygon {
         for (std::size_t j = 2, n = node.size(); j < n; ++j) {
             node_i = *(reflex_chain.end() - 1);
             node_j = node[j];
+	    
             if (are_in_opposite_chains(node_i, node_j)) {   // triangulate
                 node_i = *reflex_chain.begin();
                 on_left = !on_left;
@@ -282,7 +333,7 @@ template <int LocalDim, int EmbedDim> class Polygon {
                 node_k = *(reflex_chain.end() - 2);
                 double m_signed =
                   internals::signed_measure_2d_tri(nodes.row(node_j), nodes.row(node_k), nodes.row(node_i));
-                if ((on_left && m_signed > 0) || (!on_left && m_signed < 0)) {
+                if ((on_left && m_signed < 0) || (!on_left && m_signed > 0)) {    // reflex turn
                     reflex_chain.push_back(node_j);
                 } else {
                     do {
@@ -290,25 +341,21 @@ template <int LocalDim, int EmbedDim> class Polygon {
                         push_cell(node_i, node_j, node_k);
                         // triangulate until convex turn is found
                         reflex_chain.pop_back();
-                        node_i = *(reflex_chain.end() - 1);
-                        node_k = *(reflex_chain.end() - 2);
-                        m_signed =
-                          internals::signed_measure_2d_tri(nodes.row(node_j), nodes.row(node_k), nodes.row(node_i));
-                    } while (reflex_chain.size() > 1 && ((on_left && m_signed) < 0) || (!on_left && m_signed > 0));
+                        if (reflex_chain.size() > 1) {
+                            node_i = *(reflex_chain.end() - 1);
+                            node_k = *(reflex_chain.end() - 2);
+                            m_signed =
+                              internals::signed_measure_2d_tri(nodes.row(node_j), nodes.row(node_k), nodes.row(node_i));
+                        }
+                    } while (reflex_chain.size() > 1 && ((on_left && m_signed > 0) || (!on_left && m_signed < 0)));
                     reflex_chain.push_back(node_j);
                 }
             }
         }
-        triangulation_ = Triangulation<LocalDim, EmbedDim>(
-          nodes, Eigen::Map<DMatrix<int, Eigen::RowMajor>>(cells.data(), cells.size() / 3, 3),
-          DVector<int>::Ones(nodes.rows()));
-        return;
+        return cells;
     }
-    // getters
-    const DMatrix<double>& nodes() const { return triangulation_.nodes(); }
-    auto cells() const { return triangulation_.cells(); }
-   private:
-    Triangulation<LocalDim, EmbedDim> triangulation_;   // polygon triangulation
+    // internal face-based storage
+    Triangulation<LocalDim, EmbedDim> triangulation_;
 };
 
 }   // namespace fdapde

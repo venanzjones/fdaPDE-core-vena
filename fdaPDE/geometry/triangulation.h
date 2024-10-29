@@ -395,7 +395,7 @@ template <int N> class Triangulation<2, N> : public TriangulationBase<2, N, Tria
     locate(const Eigen::Matrix<double, Rows, Cols>& p) const {
         fdapde_static_assert(
           (Cols == 1 && Rows == embed_dim) || (Cols == Dynamic && Rows == Dynamic),
-          YOU_PASSED_A_MATRIX_OF_POINTS_TO_LOCATE_OF_THE_WRONG_DIMENSION);
+          YOU_PASSED_A_MATRIX_OF_POINTS_TO_LOCATE_OF_WRONG_DIMENSIONS);
         if (!location_policy_.has_value()) location_policy_ = LocationPolicy(this);
         return location_policy_->locate(p);
     }
@@ -702,7 +702,7 @@ template <> class Triangulation<3, 3> : public TriangulationBase<3, 3, Triangula
     locate(const Eigen::Matrix<double, Rows, Cols>& p) const {
         fdapde_static_assert(
           (Cols == 1 && Rows == embed_dim) || (Cols == Dynamic && Rows == Dynamic),
-          YOU_PASSED_A_MATRIX_OF_POINTS_TO_LOCATE_OF_THE_WRONG_DIMENSION);
+          YOU_PASSED_A_MATRIX_OF_POINTS_TO_LOCATE_OF_WRONG_DIMENSIONS);
         if (!location_policy_.has_value()) location_policy_ = LocationPolicy(this);
         return location_policy_->locate(p);
     }

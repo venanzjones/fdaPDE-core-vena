@@ -130,7 +130,7 @@ template <int LocalDim, int EmbedDim> class DCEL {
             pointer halfedge_, end_;
         };
     };
-
+  
     // an edge is an indexed pair of halfedges which are twins one another
     struct edge_t {
         edge_t() : h1_(nullptr), h2_(nullptr) { }
@@ -169,7 +169,7 @@ template <int LocalDim, int EmbedDim> class DCEL {
         // create twin edges
         for (auto it = dcel.nodes_begin(); it != dcel.nodes_end(); ++it) {
             node_t* n1 = std::addressof(*it);
-            node_t* n2 = std::addressof((it->id() == n_nodes - 1) ? *dcel.nodes_begin() : *it);
+            node_t* n2 = std::addressof(*((it->id() == n_nodes - 1) ? dcel.nodes_begin() : std::next(it, 1)));
             halfedge_t* h1 = n1->halfedge();
             halfedge_t* h2 = dcel.emplace_halfedge_(n2);   // push twin edge
             h2->set_twin(h1);
@@ -179,10 +179,10 @@ template <int LocalDim, int EmbedDim> class DCEL {
         // finalize next-prev pointer pairs
         for (auto it = dcel.nodes_begin(); it != dcel.nodes_end(); ++it) {
             halfedge_t* h1 = it->halfedge();
-            halfedge_t* h2 = ((it->id() == n_nodes - 1) ? dcel.nodes_begin() : it)->halfedge();
+            halfedge_t* h2 = ((it->id() == n_nodes - 1) ? dcel.nodes_begin() : std::next(it, 1))->halfedge();
             h1->set_next(h2);
             h2->set_prev(h1);
-            h1->twin()->set_prev(h2->twin());
+	    h1->twin()->set_prev(h2->twin());
             h2->twin()->set_next(h1->twin());
         }
         return dcel;
@@ -190,10 +190,12 @@ template <int LocalDim, int EmbedDim> class DCEL {
     // modifiers
     node_t* insert_node(const node_t& node) {
         nodes_.push_back(node);
+	nodes_map_[node.id()] = std::addressof(nodes_.back());
 	n_nodes_++;
         return std::addressof(nodes_.back());
     }
-    // insert edge between nodes with id {id1, id2} (assumes DCEL already in a valid state)
+    // insert edge between nodes with id {id1, id2} (assumes DCEL already in a valid state), while preserving the cell
+    // structure
     edge_t* insert_edge(node_t* n1, node_t* n2) {
         // create a pair of twin half-edges
         halfedge_t* h1 = emplace_halfedge_(n1);
@@ -206,32 +208,47 @@ template <int LocalDim, int EmbedDim> class DCEL {
         // update next and prev pointers
         h1->set_next(h4);
         h2->set_next(h3);
-	h1->set_prev(h3->twin()->next()->twin());
-        h2->set_prev(h4->twin()->next()->twin());
+	// O(n) prev pointer search (follow edge chain originating from h until node n is found)
+        auto find_prev = [](node_t* n, halfedge_t* h) {
+            halfedge_t* curr = h->next();
+            halfedge_t* prev = h;
+            while (curr->node() != n) {
+                prev = curr;
+                curr = curr->next();
+            }
+	    return prev;
+        };	
+        h1->set_prev(find_prev(n1, h1));
+        h2->set_prev(find_prev(n2, h2));
+	// close cell loop
+	h1->prev()->set_next(h1);
+	h2->prev()->set_next(h2);
 	
 	n_halfedges_ = n_halfedges_ + 2;
 	edges_.push_back(edge_t(n_edges_++, h1, h2));
         return std::addressof(edges_.back());
     }
+
     edge_t* insert_edge(const edge_t& edge) {
         edges_.push_back(edge);
 	n_edges_++;
         return std::addressof(edges_.back());
-    }  
+    }
     // observers
     Eigen::Matrix<double, Dynamic, Dynamic> nodes() const {   // matrix of nodes coordinates
         Eigen::Matrix<double, Dynamic, Dynamic> coords(n_nodes_, embed_dim);
         for (int i = 0; i < n_nodes_; ++i) { coords.row(nodes[i].id()) = nodes[i].coords(); }
         return coords;
     }
+    node_t* node(int id) { return nodes_map_.at(id); }
     int n_nodes() const { return n_nodes_; }
     int n_halfedges() const { return n_halfedges_; }
     int n_edges() const { return n_edges_; }
     // cyclic iteration over half-edge chain
-    typename halfedge_t::iterator halfedge_begin(halfedge_t* halfedge) {
-        return typename halfedge_t::iterator(std::addressof(halfedges_[halfedge->id()]));
+  typename halfedge_t::iterator halfedge_begin(halfedge_t* halfedge) { // make this to hafledge_circulator
+        return typename halfedge_t::iterator(halfedge);
     }
-    typename halfedge_t::iterator halfedge_end([[maybe_unused]] halfedge_t* halfedge) {
+  typename halfedge_t::iterator halfedge_end([[maybe_unused]] halfedge_t* halfedge) { // this is useless
         return typename halfedge_t::iterator(nullptr);
     }
     // sequential iterator over all halfedges
@@ -240,6 +257,9 @@ template <int LocalDim, int EmbedDim> class DCEL {
     // sequential iterator over all nodes
     typename std::list<node_t>::iterator nodes_begin() { return nodes_.begin(); }
     typename std::list<node_t>::iterator nodes_end() { return nodes_.end(); }
+
+  halfedge_t* hhh() { return std::addressof(*halfedges_.begin()); }
+  
    private:
     template <typename... Args> halfedge_t* emplace_halfedge_(Args&&... args) {
         halfedges_.emplace_back(n_halfedges_++, std::forward<Args>(args)...);
@@ -250,6 +270,7 @@ template <int LocalDim, int EmbedDim> class DCEL {
     std::list<halfedge_t> halfedges_;
     std::list<edge_t> edges_;
     int n_nodes_, n_halfedges_, n_edges_;
+    std::unordered_map<int, node_t*> nodes_map_;   // guarantees O(1) lookup of node pointer given its id
 };
   
 }   // namespace fdapde
