@@ -32,7 +32,23 @@ template <int LocalDim, int EmbedDim> class Polygon {
 
     // constructors
     Polygon() noexcept = default;
-    Polygon(const DMatrix<double>& nodes) noexcept : triangulation_() { triangulate_(nodes); }
+    Polygon(const DMatrix<double>& nodes) noexcept : triangulation_() {
+        fdapde_assert(nodes.rows() > 0 && nodes.cols() == embed_dim);
+        // check if nodes are sorted counter-clocwise
+        double area = 0;
+        int n_nodes = nodes.rows();
+        for (int i = 0; i < n_nodes - 1; ++i) {
+            area += (nodes(i, 0) + nodes(i + 1, 0)) * (nodes(i + 1, 1) - nodes(i, 1));
+        }
+        area += (nodes(n_nodes - 1, 0) + nodes(0, 0)) * (nodes(0, 1) - nodes(n_nodes - 1, 1));   // last edge
+        if (area > 0) {
+            triangulate_(nodes);
+        } else {   // nodes are in clocwise order, reverse node ordering
+            DMatrix<double> reversed_nodes(n_nodes, embed_dim);
+            for (int i = 0; i < n_nodes; ++i) { reversed_nodes.row(i) = nodes.row(n_nodes - 1 - i); }
+            triangulate_(reversed_nodes);
+        }
+    }
     Polygon(const Polygon&) noexcept = default;
     Polygon(Polygon&&) noexcept = default;  
     // observers
@@ -43,12 +59,6 @@ template <int LocalDim, int EmbedDim> class Polygon {
     int n_nodes() const { return triangulation_.n_nodes(); }
     int n_cells() const { return triangulation_.n_cells(); }
     int n_edges() const { return triangulation_.n_edges(); }
-    // point location
-    template <int Rows, int Cols>
-    std::conditional_t<Rows == Dynamic || Cols == Dynamic, DVector<int>, int>
-    locate(const Eigen::Matrix<double, Rows, Cols>& p) const {
-        return triangulation_.locate(p);
-    }
     // test whether point p is contained in polygon
     template <int Rows, int Cols>
         requires((Rows == embed_dim && Cols == 1) || (Cols == embed_dim && Rows == 1))
@@ -76,161 +86,147 @@ template <int LocalDim, int EmbedDim> class Polygon {
 
     // partition an arbitrary polygon P into a set of monotone polygons (plane sweep approach, section 3.2 of De Berg,
     // M. (2000). Computational geometry: algorithms and applications. Springer Science & Business Media.)
-    std::vector<std::vector<int>> monotone_partition_(const DMatrix<double>& nodes) {
+    std::vector<std::vector<int>> monotone_partition_(const DMatrix<double>& coords) {
         using poly_t = DCEL<local_dim, embed_dim>;
-        using node_t = typename poly_t::node_t;
-        using edge_t = typename poly_t::edge_t;
-        using node_ptr_t = std::add_pointer_t<node_t>;
-        using edge_ptr_t = std::add_pointer_t<edge_t>;
+	using halfedge_t = typename poly_t::halfedge_t;
+	using halfedge_ptr_t = std::add_pointer_t<halfedge_t>;
         // data structure inducing an ad-hoc edge ordering for monotone partitioning
-        struct edge_t_ {
+        struct edge_t {
             double p1x, p1y;   // p1 coordinates
             double p2x, p2y;   // p2 coordinates
             int id;
             // constructor
-            edge_t_(double p1x_, double p1y_, double p2x_, double p2y_) noexcept :
+            edge_t(double p1x_, double p1y_, double p2x_, double p2y_) noexcept :
                 p1x(p1x_), p1y(p1y_), p2x(p2x_), p2y(p2y_) { }
-            edge_t_(int id_, double p1x_, double p1y_, double p2x_, double p2y_) noexcept :
+            edge_t(int id_, double p1x_, double p1y_, double p2x_, double p2y_) noexcept :
                 p1x(p1x_), p1y(p1y_), p2x(p2x_), p2y(p2y_), id(id_) { }
             // right-to-left edge ordering relation along x-coordinate
-            bool operator<(const edge_t_& rhs) const {   // for monotone partitioning, rhs is always below the p1 point
-                if (rhs.p1y == rhs.p2y) {               // rhs is horizontal
-                    if (p1y == p2y) { return (p1x < rhs.p1x); }   // both edges are horizontal lines
+            bool operator<(const edge_t& rhs) const {   // for monotone partitioning, rhs is always below the p1 point
+                if (rhs.p1y == rhs.p2y) {                // rhs is horizontal
+                    if (p1y == p2y) { return (p1y < rhs.p1y); }   // both edges are horizontal lines
                     return internals::orientation(
                              std::array {p2x, p2y}, std::array {p1x, p1y}, std::array {rhs.p1x, rhs.p1y}) ==
                            internals::Orientation::LEFT;
-                } else if (p1y <= p2y) {
+                } else if (p1y == p2y || p1y < rhs.p1y) {
                     return internals::orientation(
                              std::array {rhs.p2x, rhs.p2y}, std::array {rhs.p1x, rhs.p1y}, std::array {p1x, p1y}) !=
                            internals::Orientation::LEFT;
                 } else {
                     return internals::orientation(
-                             std::array {p2x, p2y}, std::array {rhs.p1x, rhs.p1y}, std::array {p1x, p1y}) ==
+                             std::array {p2x, p2y}, std::array {p1x, p1y}, std::array {rhs.p1x, rhs.p1y}) ==
                            internals::Orientation::LEFT;
                 }
             }
         };
-        // O(n) polygon construction as Doubly Connected Edge List
-        poly_t poly = DCEL<local_dim, embed_dim>::make_polygon(nodes);
-        int n_nodes = poly.n_nodes();
-        int n_edges = poly.n_edges();
-        std::set<edge_t_> sweep_line;   // edges pierced by sweep line, sorted by x-coord
-        std::vector<node_ptr_t> helper(n_edges, nullptr);
-        std::vector<node_ptr_t> node_ptr(n_nodes);
-        for (auto it = std::make_pair(poly.nodes_begin(), 0); it.first != poly.nodes_end(); ++it.first, ++it.second) {
-            node_ptr[it.second] = std::addressof(*it.first);
-        }
-        // given node id i, return the previous and next node ids on the counterclockwise sorted polygon border
-        auto node_prev = [&](int node_id) { return node_id == 0 ? n_nodes - 1 : node_id - 1; };
-        auto node_next = [&](int node_id) { return node_id == n_nodes - 1 ? 0 : node_id + 1; };
-
-        // O(n) node type detection
-        enum node_category_t { start = 0, split = 1, end = 2, merge = 3, regular = 4 };
-        std::vector<node_category_t> node_category(n_nodes);
-        for (int i = 0; i < n_nodes; ++i) {   // counterclocwise order loop, the interior of P is always on the left
-            auto prev = nodes.row(node_prev(i));
-            auto curr = nodes.row(i);
-            auto next = nodes.row(node_next(i));
-            double m_signed = internals::signed_measure_2d_tri(prev, curr, next);
-            if (m_signed >= 0) {   // interior angle less or equal than \pi
-                if (prev[1] < curr[1] && next[1] < curr[1]) {
-                    node_category[i] = node_category_t::start;
-                } else if (prev[1] > curr[1] && next[1] > curr[1]) {
-                    node_category[i] = node_category_t::end;
-                } else {
-                    node_category[i] = node_category_t::regular;
-                }
-            } else if (m_signed < 0) {   // interior angle grater than \pi
-                if (prev[1] < curr[1] && next[1] < curr[1]) {
-                    node_category[i] = node_category_t::split;
-                } else if (prev[1] > curr[1] && next[1] > curr[1]) {
-                    node_category[i] = node_category_t::merge;
-                } else {
-                    node_category[i] = node_category_t::regular;
-                }
-            }
-        }
-        // O(nlog(n)) y-coordinate sort (break tiles using x-coordinate)
-        std::sort(node_ptr.begin(), node_ptr.end(), [&](node_ptr_t n, node_ptr_t m) {
-            int i = n->id(), j = m->id();
-            return nodes(i, 1) > nodes(j, 1) || (nodes(i, 1) == nodes(j, 1) && nodes(i, 0) < nodes(j, 0));
-        });
-        // monotone partitioning algorithm (details in section 3.2 of De Berg, M. (2000). Computational geometry:
-        // algorithms and applications. Springer Science & Business Media.)
-	std::vector<edge_ptr_t> diagonals;
-        std::vector<typename std::set<edge_t_>::iterator> sweep_line_it(n_edges);
-        sweep_line_it.resize(n_edges);
-        // given edge {p1, p2}, asserts true if the polygon interior is on the left of {p1, p2}
-        auto interior_on_left = []<typename point_t>(const point_t& p1, const point_t& p2) {
+	// given nodes p1, p2, asserts true if p1 is below p2 (induces a y-decresing ordering on polygon nodes)
+	auto below = []<typename node_t>(const node_t& p1, const node_t& p2) {
             if (p1[1] < p2[1]) {
                 return true;
             } else if (p1[1] == p2[1]) {
                 if (p1[0] < p2[0]) { return true; }
             }
-            return false;
-        };
+            return false;	  
+	};
 	
-        for (node_ptr_t v : node_ptr) {   // loops in decreasing y-coordinate order
-            int v_i = v->id();
-	    // process i-th node
-            switch (node_category[v_i]) {
+        // O(n) polygon construction as Doubly Connected Edge List
+        poly_t dcel = DCEL<local_dim, embed_dim>::make_polygon(coords);
+        int n_nodes = dcel.n_nodes();
+        int n_edges = dcel.n_edges();
+        std::set<edge_t> sweep_line;   // edges pierced by sweep line, sorted by x-coord
+        std::vector<halfedge_ptr_t> helper(n_nodes, nullptr);
+        std::vector<halfedge_ptr_t> nodes(n_nodes);   // maps node id to one of its halfedges
+
+        // O(n) node type detection
+        enum node_category_t { start = 0, split = 1, end = 2, merge = 3, regular = 4 };
+        std::unordered_map<halfedge_ptr_t, node_category_t> node_category;
+        for (auto it = dcel.nodes_begin(); it != dcel.nodes_end(); ++it) {   // counterclocwise order loop
+            nodes[it->id()] = it->halfedge();
+            auto prev = it->prev()->coords();
+            auto curr = it->coords();
+            auto next = it->next()->coords();
+            double m_signed = internals::signed_measure_2d_tri(prev, curr, next);
+            if (m_signed >= 0) {   // interior angle less or equal than \pi
+                if (below(prev, curr) && below(next, curr)) {
+                    node_category[nodes[it->id()]] = node_category_t::start;
+                } else if (below(curr, prev) && below(curr, next)) {
+                    node_category[nodes[it->id()]] = node_category_t::end;
+                } else {
+                    node_category[nodes[it->id()]] = node_category_t::regular;
+                }
+            } else {   // interior angle grater than \pi
+                if (below(prev, curr) && below(next, curr)) {
+                    node_category[nodes[it->id()]] = node_category_t::split;
+                } else if (below(curr, prev) && below(curr, next)) {
+                    node_category[nodes[it->id()]] = node_category_t::merge;
+                } else {
+                    node_category[nodes[it->id()]] = node_category_t::regular;
+                }
+            }
+        }
+        // O(nlog(n)) y-coordinate sort (break tiles using x-coordinate)
+        std::sort(nodes.begin(), nodes.end(), [&](halfedge_ptr_t n, halfedge_ptr_t m) {
+            int i = n->node()->id(), j = m->node()->id();
+            return coords(i, 1) > coords(j, 1) || (coords(i, 1) == coords(j, 1) && coords(i, 0) > coords(j, 0));
+        });
+        // monotone partitioning algorithm (details in section 3.2 of De Berg, M. (2000). Computational geometry:
+        // algorithms and applications. Springer Science & Business Media.)
+        std::vector<typename std::set<edge_t>::iterator> sweep_line_it(n_nodes);
+        sweep_line_it.resize(n_nodes);
+        for (halfedge_ptr_t v : nodes) {   // loops in decreasing y-coordinate order
+            int prev = v->node()->prev()->id();
+            int curr = v->node()->id();
+	    int next = v->node()->next()->id();
+            // process i-th node
+            switch (node_category[v]) {
             case node_category_t::start: {
-                auto ref = sweep_line.emplace(
-                  v_i, nodes(v_i, 0), nodes(v_i, 1), nodes(node_next(v_i), 0), nodes(node_next(v_i), 1));
-                sweep_line_it[v_i] = ref.first;
-                helper[v_i] = v;
+                auto ref = sweep_line.emplace(curr, coords(curr, 0), coords(curr, 1), coords(next, 0), coords(next, 1));
+                sweep_line_it[curr] = ref.first;
+                helper[curr] = v;
                 break;
             }
             case node_category_t::end: {
-                if (node_category[helper[node_prev(v_i)]->id()] == node_category_t::merge) {
-                    diagonals.push_back(poly.insert_edge(v, helper[node_prev(v_i)]));
-                }
-                sweep_line.erase(sweep_line_it[node_prev(v_i)]);
+                if (node_category[helper[prev]] == node_category_t::merge) { dcel.insert_edge(v, helper[prev]); }
+                sweep_line.erase(sweep_line_it[prev]);
                 break;
             }
             case node_category_t::split: {
-                // search edge in sweep line directly left to v_i
-                edge_t_ edge(nodes(v_i, 0), nodes(v_i, 1), nodes(v_i, 0), nodes(v_i, 1));
+                // search edge in sweep line directly left to curr
+                edge_t edge(coords(curr, 0), coords(curr, 1), coords(curr, 0), coords(curr, 1));
                 auto it = sweep_line.lower_bound(edge);
-                // insert diagonal
-                diagonals.push_back(poly.insert_edge(v, helper[it->id]));
-                helper[it->id] = v;
-                auto ref = sweep_line.emplace(
-                  v_i, nodes(v_i, 0), nodes(v_i, 1), nodes(node_next(v_i), 0), nodes(node_next(v_i), 1));
-                sweep_line_it[v_i] = ref.first;
-                helper[v_i] = v;
+                // insert diagonal (update v to point to the inserted diagonal)
+                helper[it->id] = dcel.insert_edge(v, helper[it->id]);
+                auto ref = sweep_line.emplace(curr, coords(curr, 0), coords(curr, 1), coords(next, 0), coords(next, 1));
+                sweep_line_it[curr] = ref.first;
+                helper[curr] = v;
                 break;
             }
             case node_category_t::merge: {
-                if (node_category[helper[node_prev(v_i)]->id()] == node_category_t::merge) {   // insert diagonal
-                    diagonals.push_back(poly.insert_edge(v, helper[node_prev(v_i)]));
-                }
-                sweep_line.erase(sweep_line_it[node_prev(v_i)]);
-                // search edge in sweep line directly left to v_i
-                edge_t_ edge(nodes(v_i, 0), nodes(v_i, 1), nodes(v_i, 0), nodes(v_i, 1));
+                if (node_category[helper[prev]] == node_category_t::merge) { dcel.insert_edge(v, helper[prev]); }
+                sweep_line.erase(sweep_line_it[prev]);
+                // search edge in sweep line directly left to curr
+                edge_t edge(coords(curr, 0), coords(curr, 1), coords(curr, 0), coords(curr, 1));
                 auto it = sweep_line.lower_bound(edge);
-                if (node_category[it->id] == node_category_t::merge) {
-                    diagonals.push_back(poly.insert_edge(v, helper[it->id]));
+                if (node_category[helper[it->id]] == node_category_t::merge) {
+                    v = dcel.insert_edge(v, helper[it->id]);   // update v to point to the inserted diagonal
                 }
                 helper[it->id] = v;
                 break;
             }
             case node_category_t::regular: {
-                if (!interior_on_left(nodes.row(v_i), nodes.row(node_next(v_i)))) {
-                    if (node_category[helper[node_prev(v_i)]->id()] == node_category_t::merge) {   // insert diagonal
-                        diagonals.push_back(poly.insert_edge(v, helper[node_prev(v_i)]));
-                    }
-                    sweep_line.erase(sweep_line_it[node_prev(v_i)]);
-                    auto ref = sweep_line.emplace(
-                      v_i, nodes(v_i, 0), nodes(v_i, 1), nodes(node_next(v_i), 0), nodes(node_next(v_i), 1));
-                    sweep_line_it[v_i] = ref.first;
-                    helper[v_i] = v;
+                if (!below(coords.row(curr), coords.row(next))) {
+                    // polygon interior is on the right of this halfedge
+                    if (node_category[helper[prev]] == node_category_t::merge) { dcel.insert_edge(v, helper[prev]); }
+                    sweep_line.erase(sweep_line_it[prev]);
+                    auto ref =
+                      sweep_line.emplace(curr, coords(curr, 0), coords(curr, 1), coords(next, 0), coords(next, 1));
+                    sweep_line_it[curr] = ref.first;
+                    helper[curr] = v;
                 } else {
-		    // search edge in sweep line directly left to v_i
-                    edge_t_ edge(nodes(v_i, 0), nodes(v_i, 1), nodes(v_i, 0), nodes(v_i, 1));
+                    // search edge in sweep line directly left to curr
+                    edge_t edge(coords(curr, 0), coords(curr, 1), coords(curr, 0), coords(curr, 1));
                     auto it = sweep_line.lower_bound(edge);
-                    if (node_category[helper[it->id]->id()] == node_category_t::merge) {
-                        diagonals.push_back(poly.insert_edge(v, helper[it->id]));
+                    if (node_category[helper[it->id]] == node_category_t::merge) {
+                        v = dcel.insert_edge(v, helper[it->id]);
                     }
                     helper[it->id] = v;
                 }
@@ -239,24 +235,24 @@ template <int LocalDim, int EmbedDim> class Polygon {
             }
         }
         // recover from the DCEL structure the node numbering of each monotone polygon
-        std::vector<bool> visited(poly.n_halfedges(), false);
+        std::vector<bool> visited(dcel.n_halfedges(), false);
         std::vector<std::vector<int>> monotone_partition;
-        auto collect_polygon_node_id_from = [&]<typename halfedge_t>(halfedge_t* chain) mutable {
-            auto& it = monotone_partition.emplace_back();
-            for (auto jt = poly.halfedge_begin(chain); jt != poly.halfedge_end(chain); ++jt) {
-                int node_id = jt->node()->id();
-                it.push_back(node_id);
-                visited[jt->id()] = true;
+        if (dcel.n_cells() == 1) {   // polygon was already monotone
+	  auto& it = monotone_partition.emplace_back();
+	  it.resize(n_nodes);
+	  std::iota(it.begin(), it.end(), 0);
+        } else {
+            for (auto cell = dcel.cells_begin(); cell != dcel.cells_end(); ++cell) {
+                auto& it = monotone_partition.emplace_back();
+                halfedge_t *chain = cell->halfedge(), *end = chain;
+                do {
+                    it.push_back(chain->node()->id());
+                    chain = chain->next();
+                } while (end != chain);
             }
-        };
-        for (edge_ptr_t diagonal : diagonals) {
-            // follow the chains from the halfedges composing this edge, if halfedge not already visited
-            if (!visited[diagonal->first() ->id()]) { collect_polygon_node_id_from(diagonal->first ()); }
-            if (!visited[diagonal->second()->id()]) { collect_polygon_node_id_from(diagonal->second()); }
         }
         return monotone_partition;
     }
-
     // triangulate monotone polygon (returns a RowMajor ordered matrix of cells).
     std::vector<int> triangulate_monotone_(const DMatrix<double>& nodes) {
         // every triangulation of a polygon of n points has n - 2 triangles (lemma 1.2.2 of (1))
@@ -317,7 +313,6 @@ template <int LocalDim, int EmbedDim> class Polygon {
         for (std::size_t j = 2, n = node.size(); j < n; ++j) {
             node_i = *(reflex_chain.end() - 1);
             node_j = node[j];
-	    
             if (are_in_opposite_chains(node_i, node_j)) {   // triangulate
                 node_i = *reflex_chain.begin();
                 on_left = !on_left;
