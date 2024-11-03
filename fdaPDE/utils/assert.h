@@ -25,7 +25,7 @@ namespace fdapde {
   
 namespace internals {
   
-void fdapde_assert_failed_(const char* str, const char* file, int line) {
+inline void fdapde_assert_failed_(const char* str, const char* file, int line) {
     std::cerr << file << ":" << line << ". Assertion: '" << str << "' failed." << std::endl;
     abort();
 }
