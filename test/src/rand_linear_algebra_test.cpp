@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>   // testing framework
 
 #include <fdaPDE/linear_algebra.h>
+
 using fdapde::core::RSVD;
 using fdapde::core::REVD;
 using fdapde::core::NystromApproximation;
@@ -27,7 +28,6 @@ using fdapde::core::RBKI;
 using fdapde::core::NysRSI;
 using fdapde::core::NysRBKI;
 using fdapde::core::RPChol;
-
 #include "utils/utils.h"
 using fdapde::testing::almost_equal;
 
@@ -134,4 +134,3 @@ TEST(nys_approximation, block_larger_than_one){
 
     EXPECT_TRUE((A-rp_chol.factor()*rp_chol.factor().transpose()).norm() < tol*A.norm());
 }
-

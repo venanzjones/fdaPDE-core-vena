@@ -17,10 +17,16 @@
 #ifndef __FDAPDE_LINEAR_ALGEBRA_MODULE_H__
 #define __FDAPDE_LINEAR_ALGEBRA_MODULE_H__
 
+#include <Eigen/Core>
+#include <Eigen/Sparse>
+
 #include "linear_algebra/binary_matrix.h"
-#include "linear_algebra/kronecker_product.h"
+#include "linear_algebra/constexpr_matrix.h"
+#include "linear_algebra/kronecker.h"
+#include "linear_algebra/lumping.h"
 #include "linear_algebra/smw.h"
 #include "linear_algebra/sparse_block_matrix.h"
+#include "linear_algebra/fspai.h"
 #include "linear_algebra/lumping.h"
 
 #include "fdaPDE/linear_algebra/randomized_algorithms/rsvd.h"

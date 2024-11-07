@@ -21,7 +21,6 @@
 #include "../linear_algebra/binary_matrix.h"
 
 namespace fdapde {
-namespace core {
   
 // template specialization for 1D meshes (bounded intervals)
 template <int M, int N> class Triangulation;
@@ -61,8 +60,8 @@ template <> class Triangulation<1, 1> {
 	nodes_markers_.set(0);
 	nodes_markers_.set(n_nodes_ - 1);
     };
-    // construct from interval's bounds [a, b] and the number of subintervals n into which split [a, b]
-    Triangulation(double a, double b, int n) : Triangulation(DVector<double>::LinSpaced(n + 1, a, b)) { }
+    // construct from interval's bounds [a, b] and the number of equidistant nodes n used to split [a, b]
+    Triangulation(double a, double b, int n) : Triangulation(DVector<double>::LinSpaced(n, a, b)) { }
 
     // getters
     CellType cell(int id) const { return CellType(id, this); }
@@ -77,8 +76,8 @@ template <> class Triangulation<1, 1> {
     SVector<2> range() const { return range_; }
 
     // iterators support
-    class cell_iterator : public index_based_iterator<cell_iterator, CellType> {
-        using Base = index_based_iterator<cell_iterator, CellType>;
+    class cell_iterator : public internals::index_iterator<cell_iterator, CellType> {
+        using Base = internals::index_iterator<cell_iterator, CellType>;
         using Base::index_;
         friend Base;
         const Triangulation* mesh_;
@@ -133,7 +132,6 @@ template <> class Triangulation<1, 1> {
     int n_nodes_ = 0, n_cells_ = 0;
 };
 
-}   // namespace core
 }   // namespace fdapde
 
 #endif   // __INTERVAL_H__
