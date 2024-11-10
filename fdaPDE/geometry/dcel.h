@@ -17,8 +17,11 @@
 #ifndef __DCEL_H__
 #define __DCEL_H__
 
-namespace fdapde {
+#include "../utils/traits.h"
+#include "../utils/symbols.h"
 
+namespace fdapde {
+  
 // implementation of the Double Connected Edge List data structure (also known as DCEL or half-edge)
 template <int LocalDim, int EmbedDim> class DCEL {
    public:

@@ -20,6 +20,7 @@
 #include <array>
 #include <unordered_map>
 #include <vector>
+#include <random>
 
 #include "../linear_algebra/binary_matrix.h"
 #include "../utils/constexpr.h"
@@ -191,6 +192,31 @@ template <int M, int N, typename Derived> class TriangulationBase {
     boundary_node_iterator boundary_nodes_end() const {
         return boundary_node_iterator(n_nodes_, static_cast<const Derived*>(this));
     }
+    // random sample points in triangulation
+    DMatrix<double> sample(int n_samples, int seed = fdapde::random_seed) {
+        // set up random number generation
+        int seed_ = (seed == fdapde::random_seed) ? std::random_device()() : seed;
+        std::mt19937 rng(seed_);
+        // probability of random sampling a cell equals (measure of cell)/(measure of polygon)
+        std::vector<double> weights(n_cells_);
+        for (cell_iterator it = cells_begin(); it != cells_end(); ++it) { weights[it->id()] = it->measure(); }
+        std::discrete_distribution<int> rand_cell(weights.begin(), weights.end());
+        std::uniform_real_distribution<double> rand_real(0, 1);
+        DMatrix<double> coords(n_samples, embed_dim);
+        for (int i = 0; i < n_samples; ++i) {
+            // generate random element
+            int cell_id = rand_cell(rng);
+            auto e = static_cast<const Derived&>(*this).cell(cell_id);
+            // generate random point in cell
+            double t = rand_real(rng);
+            coords.row(i) = t * e.node(0) + (1 - t) * e.node(1);
+            for (int j = 1; j < local_dim; ++j) {
+                t = rand_real(rng);
+                coords.row(i) = (1 - t) * e.node(1 + j) + t * coords.row(i);
+            }
+        }
+        return coords;
+    }
    protected:
     DMatrix<double> nodes_ {};                         // physical coordinates of mesh's vertices
     DMatrix<int, Eigen::RowMajor> cells_ {};           // nodes (as row indexes in nodes_ matrix) composing each cell
@@ -219,8 +245,8 @@ template <int N> class Triangulation<2, N> : public TriangulationBase<2, N, Tria
 
     Triangulation() = default;
     Triangulation(
-      const DMatrix<double>& nodes, const DMatrix<int>& faces, const DMatrix<int>& boundary, int flags = 0) :
-        Base(nodes, faces, boundary, flags) {
+      const DMatrix<double>& nodes, const DMatrix<int>& cells, const DMatrix<int>& boundary, int flags = 0) :
+        Base(nodes, cells, boundary, flags) {
         if (Base::flags_ & cache_cells) {   // populate cache if cell caching is active
             cell_cache_.reserve(n_cells_);
             for (int i = 0; i < n_cells_; ++i) { cell_cache_.emplace_back(i, this); }

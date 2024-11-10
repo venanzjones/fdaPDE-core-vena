@@ -17,14 +17,16 @@
 #ifndef __POLYGON_H__
 #define __POLYGON_H__
 
-#include "primitives.h"
-#include "dcel.h"
 #include <deque>
 #include <set>
 
+#include "dcel.h"
+#include "primitives.h"
+#include "triangulation.h"
+
 namespace fdapde {
 
-// a polygon is a connected list of vertices
+// a polygon is a connected list of vertices, possibly formed by more than one ring
 template <int LocalDim, int EmbedDim> class Polygon {
    public:
     static constexpr int local_dim = LocalDim;
@@ -34,26 +36,22 @@ template <int LocalDim, int EmbedDim> class Polygon {
     Polygon() noexcept = default;
     Polygon(const DMatrix<double>& nodes) noexcept : triangulation_() {
         fdapde_assert(nodes.rows() > 0 && nodes.cols() == embed_dim);
-        // check if nodes are sorted counter-clocwise
-        double area = 0;
-        int n_nodes = nodes.rows();
-        for (int i = 0; i < n_nodes - 1; ++i) {
-            area += (nodes(i, 0) + nodes(i + 1, 0)) * (nodes(i + 1, 1) - nodes(i, 1));
-        }
-        area += (nodes(n_nodes - 1, 0) + nodes(0, 0)) * (nodes(0, 1) - nodes(n_nodes - 1, 1));   // last edge
-        if (area > 0) {
+        if (internals::are_2d_counterclockwise_sorted(nodes)) {
             triangulate_(nodes);
         } else {   // nodes are in clocwise order, reverse node ordering
+            int n_nodes = nodes.rows();
             DMatrix<double> reversed_nodes(n_nodes, embed_dim);
             for (int i = 0; i < n_nodes; ++i) { reversed_nodes.row(i) = nodes.row(n_nodes - 1 - i); }
             triangulate_(reversed_nodes);
         }
     }
+  
     Polygon(const Polygon&) noexcept = default;
     Polygon(Polygon&&) noexcept = default;  
     // observers
     const DMatrix<double>& nodes() const { return triangulation_.nodes(); }
     const DMatrix<int, Eigen::RowMajor>& cells() const { return triangulation_.cells(); }
+    Eigen::Map<const DMatrix<int, Eigen::RowMajor>> edges() const { return triangulation_.edges(); }
     const Triangulation<local_dim, embed_dim>& triangulation() const { return triangulation_; }
     double measure() const { return triangulation_.measure(); }
     int n_nodes() const { return triangulation_.n_nodes(); }
@@ -64,6 +62,10 @@ template <int LocalDim, int EmbedDim> class Polygon {
         requires((Rows == embed_dim && Cols == 1) || (Cols == embed_dim && Rows == 1))
     bool contains(const Eigen::Matrix<double, Rows, Cols>& p) const {
         return triangulation_.locate(p) != -1;
+    }
+    // random sample points in polygon
+    DMatrix<double> sample(int n_samples, int seed = fdapde::random_seed) {
+        return triangulation_.sample(n_samples, seed);
     }
    private:
     // perform polygon triangulation
@@ -86,7 +88,7 @@ template <int LocalDim, int EmbedDim> class Polygon {
 
     // partition an arbitrary polygon P into a set of monotone polygons (plane sweep approach, section 3.2 of De Berg,
     // M. (2000). Computational geometry: algorithms and applications. Springer Science & Business Media.)
-    std::vector<std::vector<int>> monotone_partition_(const DMatrix<double>& coords) {
+    std::vector<std::vector<int>> monotone_partition_(const DMatrix<double>& coords) {      
         using poly_t = DCEL<local_dim, embed_dim>;
 	using halfedge_t = typename poly_t::halfedge_t;
 	using halfedge_ptr_t = std::add_pointer_t<halfedge_t>;
@@ -133,7 +135,7 @@ template <int LocalDim, int EmbedDim> class Polygon {
         int n_nodes = dcel.n_nodes();
         int n_edges = dcel.n_edges();
         std::set<edge_t> sweep_line;   // edges pierced by sweep line, sorted by x-coord
-        std::vector<halfedge_ptr_t> helper(n_nodes, nullptr);
+        std::vector<halfedge_ptr_t> helper(n_edges, nullptr);
         std::vector<halfedge_ptr_t> nodes(n_nodes);   // maps node id to one of its halfedges
 
         // O(n) node type detection
@@ -351,6 +353,100 @@ template <int LocalDim, int EmbedDim> class Polygon {
     }
     // internal face-based storage
     Triangulation<LocalDim, EmbedDim> triangulation_;
+};
+
+// a multipolygon is a collection of polygons, backed by a single face-based triangulation
+template <int LocalDim, int EmbedDim> class MultiPolygon {
+   public:
+    static constexpr int local_dim = LocalDim;
+    static constexpr int embed_dim = EmbedDim;
+    using polygon_t = Polygon<local_dim, embed_dim>;
+
+    MultiPolygon() : n_polygons_(0) { }
+    // rings is a vector of matrix of coordinates, where, each inner matrix defines a closed non self-intersecting loop
+    MultiPolygon(const std::vector<Eigen::Matrix<double, Dynamic, Dynamic>>& rings) : n_polygons_(0) {
+        // ESRI shapefile format specification: loops in clockwise order define the outer border of a polygon,
+        // loops in counterclockwise order defines a hole inside the last found outer polygonal ring
+        int n_rings = rings.size();
+        if (n_rings == 1) {
+            triangulation_ = Polygon<local_dim, embed_dim>(rings[0]).triangulation();
+        } else {
+            // detect polygons with holes
+            using iterator = typename std::vector<Eigen::Matrix<double, Dynamic, Dynamic>>::const_iterator;
+            constexpr int n_nodes_per_cell = 3;
+            std::vector<std::pair<iterator, iterator>> polygons;
+            iterator begin = rings.begin();
+            iterator end = begin;
+            int n_nodes = 0;
+            while (end != rings.end()) {
+                n_nodes += end->rows();
+                ++end;
+                while (end != rings.end() && internals::are_2d_counterclockwise_sorted(*end)) {   // detect holes
+                    n_nodes += end->rows();
+                    ++end;
+                }
+                polygons.emplace_back(begin, end);
+                begin = end;
+            }
+            Eigen::Matrix<double, Dynamic, Dynamic> nodes(n_nodes, embed_dim);
+            std::vector<int> cells;
+            int nodes_off_ = 0;
+            for (const Eigen::Matrix<double, Dynamic, Dynamic>& coords : rings) {
+                // triangulate polygon
+                Triangulation<local_dim, embed_dim> poly_tri = Polygon<local_dim, embed_dim>(coords).triangulation();
+                nodes.middleRows(nodes_off_, poly_tri.n_nodes()) = poly_tri.nodes();
+                // copy cells
+                for (int i = 0, n = poly_tri.cells().rows(); i < n; ++i) {
+                    for (int j = 0; j < n_nodes_per_cell; ++j) { cells.push_back(poly_tri.cells()(i, j) + nodes_off_); }
+                }
+                nodes_off_ += poly_tri.n_nodes();
+		n_polygons_++;
+		n_nodes_per_polygon_.push_back(poly_tri.n_nodes());
+            }
+            // set up face-based storage
+            triangulation_ = Triangulation<local_dim, embed_dim>(
+              nodes,
+              Eigen::Map<DMatrix<int, Eigen::RowMajor>>(
+                cells.data(), cells.size() / n_nodes_per_cell, n_nodes_per_cell),
+              DVector<int>::Ones(nodes.rows()));
+        }
+    }
+    // observers
+    const DMatrix<double>& nodes() const { return triangulation_.nodes(); }
+    const DMatrix<int, Eigen::RowMajor>& cells() const { return triangulation_.cells(); }
+    Eigen::Map<const DMatrix<int, Eigen::RowMajor>> edges() const { return triangulation_.edges(); }
+    // computes only the boundary edges of the multipoligon (discards triangulation's edges)
+    Eigen::Matrix<int, Dynamic, Dynamic, Eigen::RowMajor> boundary_edges() const {
+        int n_edges = triangulation_.n_boundary_edges();
+	Eigen::Matrix<int, Dynamic, Dynamic, Eigen::RowMajor> m(n_edges, 2);
+        int j = 0;
+        for (int i = 0, k = triangulation_.n_edges(); i < k; ++i) {
+            if (triangulation_.is_edge_on_boundary(i)) { m.row(j++) = triangulation_.edges().row(i); }
+        }
+        return m;
+    }
+    const Triangulation<local_dim, embed_dim>& triangulation() const { return triangulation_; }
+    double measure() const { return triangulation_.measure(); }
+    int n_nodes() const { return triangulation_.n_nodes(); }
+    int n_cells() const { return triangulation_.n_cells(); }
+    int n_edges() const { return triangulation_.n_edges(); }
+    int n_boundary_edges() const { return triangulation_.n_boundary_nodes(); }
+    int n_polygons() const { return n_polygons_; }
+    // test whether point p is contained in polygon
+    template <int Rows, int Cols>
+        requires((Rows == embed_dim && Cols == 1) || (Cols == embed_dim && Rows == 1))
+    bool contains(const Eigen::Matrix<double, Rows, Cols>& p) const {
+        return triangulation_.locate(p) != -1;
+    }
+    // random sample points in polygon
+    DMatrix<double> sample(int n_samples, int seed = fdapde::random_seed) {
+        return triangulation_.sample(n_samples, seed);
+    }
+   private:
+    // internal face-based storage
+    Triangulation<LocalDim, EmbedDim> triangulation_;
+    std::vector<int> n_nodes_per_polygon_;
+    int n_polygons_;
 };
 
 }   // namespace fdapde

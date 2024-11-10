@@ -18,6 +18,7 @@
 #define __GEOMETRIC_PRIMITIVES_H__
 
 #include "../utils/symbols.h"
+#include "../utils/traits.h"
 
 namespace fdapde {
 namespace internals {
@@ -47,13 +48,34 @@ template <typename PointT>
 constexpr bool are_2d_counterclockwise_sorted(const PointT& a, const PointT& b, const PointT& c) {
     return signed_measure_2d_tri(a, b, c) > 0;
 }
-// area of 2D polygon given counterclockwise sorted vertices v_0, v_1, \ldots, v_{n-1} (lemma 1.3.3 of (1))
-template <typename PointList> constexpr double area_2d_polygon(const PointList& points) {
+// area of 2D polygon given counterclockwise sorted vertices v_0, v_1, \ldots, v_{n - 1} (lemma 1.3.3 of (1))
+template <typename PointList>
+    requires(fdapde::is_eigen_dense_v<PointList> || fdapde::is_subscriptable<PointList, int>)
+constexpr double signed_measure_2d_polygon(const PointList& points) {
     double area = 0;
-    for (std::size_t i = 1, n = points.size() - 1; i < n; ++i) {
-        area += signed_mesure_2d_tri(points[0], points[i], points[i + 1]);
+    if constexpr (fdapde::is_eigen_dense_v<PointList>) {
+        fdapde_assert(points.rows() > 0 && points.cols() == 2);
+        int n_points = points.rows();
+        for (int i = 0; i < n_points - 1; ++i) {
+            area += (points(i, 0) + points(i + 1, 0)) * (points(i + 1, 1) - points(i, 1));
+        }
+        area += (points(n_points - 1, 0) + points(0, 0)) * (points(0, 1) - points(n_points - 1, 1));
+    } else if (fdapde::is_subscriptable<PointList, int>) {
+        // assume points to be a RowMajor expansion of the polygon nodes' coordinates
+        fdapde_assert(points.size() % 2 == 0);
+        int n_points = points.size() / 2;
+        for (int i = 0; i < n_points - 1; ++i) {
+            area += (points[i] + points[i + 2]) * (points[i + 3] - points[i + 1]);
+        }
+        area += (points[n_points - 2] + points[0]) * (points[1] - points[n_points - 1]);
     }
-    return 0.5 * area;
+    return area;
+}
+template <typename PointList> constexpr bool are_2d_counterclockwise_sorted(const PointList& points) {
+    return signed_measure_2d_polygon(points) > 0;
+}
+template <typename PointList> constexpr bool are_2d_clockwise_sorted(const PointList& points) {
+    return signed_measure_2d_polygon(points) < 0;
 }
 
 // 2D point-line orientation test
