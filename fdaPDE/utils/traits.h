@@ -73,6 +73,14 @@ struct has_instance_of<E, std::tuple<U, Tail...>> {
 template <template <typename, typename...> typename E, typename Tuple>
 static constexpr bool has_instance_of_v = has_instance_of<E, Tuple>::value;
 
+// given a std::tuple<...> implementing some typelist, moves its parameter pack to template T<...>
+template <template <typename...> typename T, typename U> struct strip_tuple_into;
+template <template <typename...> typename T, typename... Us>
+struct strip_tuple_into<T, std::tuple<Us...>> : std::type_identity<T<Us...>> { };
+template <template <typename...> typename T, typename... Us>
+
+using strip_tuple_into_t = typename strip_tuple_into<T, std::tuple<Us...>>::type;
+  
 // trait to detect whether all types in a parameter pack are unique
 template <typename... Ts> struct unique_types;
 // consider a pair of types and develop a tree of matches starting from them
@@ -188,6 +196,11 @@ template <typename T> class is_eigen_dense_vector {
     static constexpr bool value = check_();
 };
 template <typename T> constexpr bool is_eigen_dense_vector_v = is_eigen_dense_vector<T>::value;
+
+// trait to detect if T is a std::shared_ptr of some type
+template <typename T> struct is_shared_ptr : std::false_type { };
+template <typename T> struct is_shared_ptr<std::shared_ptr<T>> : std::true_type { };
+template <typename T> constexpr bool is_shared_ptr_v = is_shared_ptr<T>::value;
 
 }   // namespace fdapde
 

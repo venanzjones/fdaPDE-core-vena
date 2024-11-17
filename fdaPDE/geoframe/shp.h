@@ -382,7 +382,7 @@ class dbf_reader {
                 name.erase(std::find(name.begin(), name.end(), '\0'), name.end());   // remove \0 chars
                 char type = read<char>(buff_, head_, LittleEndian);
                 skip(4);    // reserved
-                int length = read<std::int8_t>(buff_, head_, LittleEndian);
+                int length = read<std::uint8_t>(buff_, head_, LittleEndian);
                 skip(15);   // reserved
                 fields_.emplace_back(name, type, length);
             }
@@ -411,9 +411,21 @@ class dbf_reader {
     template <typename T> std::vector<T> get_as(std::string colname) const {
         fdapde_assert(data_.count(colname) == 1);
         if constexpr (std::is_same<T, std::string>::value) {
-            return data_.at(colname);
+            std::vector<std::string> values;
+            values.reserve(data_.at(colname).size());
+            for (const auto& v : data_.at(colname)) {
+                std::string tmp = v;
+                std::erase(tmp, ' ');   // remove spaces
+                if (tmp.empty()) {
+                    values.push_back("<NA>");
+                } else {
+                    values.push_back(tmp);
+                }
+            }
+            return values;
         } else {
             std::vector<T> values;
+	    values.reserve(data_.at(colname).size());
             T val {};
             for (const auto& v : data_.at(colname)) {
                 std::from_chars(v.data(), v.data() + v.size(), val);
@@ -442,21 +454,26 @@ class ShapeFile {
         if (filepath.extension() == ".shp") {
             filename_ = filepath.parent_path() / filepath.stem();
         } else {
-            throw std::runtime_error(filename + "is not a .shp file.");
+            throw std::runtime_error(filename + ": not a valid .shp file.");
         }
         // load geometric features and associated data
         shp_ = shp_reader(filename_ + ".shp");
-        dbf_ = dbf_reader(filename_ + ".dbf");
-        // retrieve GCS informations from .prj file
-        std::ifstream prj;
-        prj.open(filename_ + ".prj");
-        if (prj) {
-            std::string line;
-            getline(prj, line);
-            std::size_t i = line.find("GEOGCS", 0);
-            i += std::string("GEOGCS[\"").size();
-            std::size_t j = line.find("\"", i);
-            gcs_ = line.substr(i, j - i);
+	// dbf and prj files are optional, read only if provided
+        std::filesystem::path dbf_filepath(filename_ + ".dbf");
+        if (std::filesystem::exists(dbf_filepath)) { dbf_ = dbf_reader(filename_ + ".dbf"); }
+        std::filesystem::path prj_filepath(filename_ + ".prj");
+        if (std::filesystem::exists(prj_filepath)) {
+            // retrieve GCS informations from .prj file
+            std::ifstream prj;
+            prj.open(filename_ + ".prj");
+            if (prj) {
+                std::string line;
+                getline(prj, line);
+                std::size_t i = line.find("GEOGCS", 0);
+                i += std::string("GEOGCS[\"").size();
+                std::size_t j = line.find("\"", i);
+                gcs_ = line.substr(i, j - i);
+            }
         }
     }
     // observers

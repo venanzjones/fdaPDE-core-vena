@@ -102,7 +102,7 @@ template <typename T> class Duplet {
 struct pair_hash {
     template <typename T1, typename T2> std::size_t operator()(const std::pair<T1, T2>& pair) const {
         std::size_t hash = 0;
-        hash ^= std::hash<T1>()(pair.first) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+        hash ^= std::hash<T1>()(pair.first ) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
         hash ^= std::hash<T2>()(pair.second) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
         return hash;
     }
