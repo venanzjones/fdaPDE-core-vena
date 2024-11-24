@@ -179,7 +179,7 @@ template <typename Scalar_, typename DataLayer> struct plain_col_view {
     size_t cols() const { return 1; }
     size_t size() const { return data_->rows(); }
     index_t id() const { return col_; }
-    const auto& field_descriptors() const { return data_->field_descriptors(); }
+    const auto& field_descriptor() const { return data_->field_descriptor(colname_); }
     const std::string& colname() const { return colname_; }
     internals::dtype type_id() const { return type_id_; }
     // accessors
@@ -201,7 +201,7 @@ template <typename Scalar_, typename DataLayer> struct plain_col_view {
     std::vector<bool> operator> (const Scalar& rhs) const { return logical_apply_(rhs, std::greater<Scalar>       {}); }
     std::vector<bool> operator<=(const Scalar& rhs) const { return logical_apply_(rhs, std::less_equal<Scalar>    {}); }
     std::vector<bool> operator>=(const Scalar& rhs) const { return logical_apply_(rhs, std::greater_equal<Scalar> {}); }
-   private:
+   protected:
     template <typename Functor> std::vector<bool> logical_apply_(const Scalar& rhs, Functor&& f) const {
         std::vector<bool> mask(rows(), false);
         for (int i = 0, n = rows(); i < n; ++i) {
@@ -216,6 +216,40 @@ template <typename Scalar_, typename DataLayer> struct plain_col_view {
     std::string colname_;
 };
 
+template <typename Scalar_, typename DataLayer> struct filtered_col_view : public plain_col_view<Scalar_, DataLayer> {
+    using Scalar = Scalar_;
+    using Base = plain_col_view<Scalar_, DataLayer>;
+    using index_t = typename Base::index_t;
+    using size_t = typename Base::size_t;
+    static constexpr int Order = Base::Order;
+    using reference = typename Base::reference;
+    using const_reference = typename Base::const_reference;
+
+    filtered_col_view() noexcept = default;
+    template <typename FieldDescriptor>
+    filtered_col_view(DataLayer* data, const FieldDescriptor& desc, const std::vector<index_t>& idxs) noexcept :
+        Base(data, desc), idxs_(idxs) { }
+    // observers
+    size_t rows() const { return idxs_.size(); }
+    size_t cols() const { return 1; }
+    size_t size() const { return idxs_.size(); }
+    index_t id() const { return Base::col_; }
+    // accessors
+    template <typename... Idxs>
+        requires(std::is_convertible_v<Idxs, index_t> && ...) &&
+                (sizeof...(Idxs) == Order - 1 && !std::is_const_v<DataLayer>)
+    reference operator()(Idxs&&... idxs) {
+        return Base::operator()(static_cast<index_t>(idxs_[idxs])...);
+    }
+    template <typename... Idxs>
+        requires(std::is_convertible_v<Idxs, index_t> && ...) && (sizeof...(Idxs) == Order - 1)
+    const_reference operator()(Idxs&&... idxs) const {
+        return Base::operator()(static_cast<index_t>(idxs_[idxs])...);
+    }
+   private:
+    std::vector<index_t> idxs_ {};
+};
+
 // an indexed set of rows
 template <typename DataLayer> struct plain_row_filter {
     using index_t = typename DataLayer::index_t;
@@ -228,7 +262,9 @@ template <typename DataLayer> struct plain_row_filter {
 
     plain_row_filter() noexcept = default;
     template <typename Iterator>
-    plain_row_filter(DataLayer* data, Iterator begin, Iterator end) : data_(data), idxs_(begin, end) { }
+    plain_row_filter(DataLayer* data, Iterator begin, Iterator end) : data_(data), idxs_(begin, end) {
+      fdapde_assert(*begin >= 0 && *begin < data->rows() && *(end - 1) >= *begin && *(end - 1) < data->rows());
+    }
     template <typename Filter>
         requires(requires(Filter f, index_t i) {
             { f(i) } -> std::same_as<bool>;
@@ -254,6 +290,8 @@ template <typename DataLayer> struct plain_row_filter {
     size_t cols() const { return data_->cols(); }
     size_t size() const { return rows() * cols(); }
     const auto& field_descriptors() const { return data_->field_descriptors(); }
+    const auto& field_descriptor(const std::string& colname) const { return data_->field_descriptor(colname); }
+    std::vector<std::string> colnames() const { return data_->colnames(); }
     // accessors
     row_view operator()(index_t i) {
         fdapde_assert(i < idxs_.size());
@@ -262,6 +300,12 @@ template <typename DataLayer> struct plain_row_filter {
     const_row_view operator()(index_t i) const {
         fdapde_assert(i < idxs_.size());
         return data_->row(idxs_[i]);
+    }
+    template <typename T> filtered_col_view<T, DataLayer> get(const std::string& colname) {
+        return filtered_col_view<T, DataLayer>(data_, field_descriptor(colname), idxs_);
+    }
+    template <typename T> filtered_col_view<T, const DataLayer> get(const std::string& colname) const {
+        return filtered_col_view<T, const DataLayer>(data_, field_descriptor(colname), idxs_);
     }
     // iterator support
     class iterator {
@@ -379,9 +423,15 @@ template <int Order_> class plain_data_layer {
               if constexpr (internals::is_pair_v<std::decay_t<DataT>>) {   // DataT is a pair-like structure
                   return is_valid_pair_v<std::decay_t<std::decay_t<DataT>>>;
               } else if constexpr (requires(DataT data, index_t i) {   // DataT is a vector of pairs
-                             { data[i] };
-                         }) {
-                  return is_valid_pair_v<decltype(std::declval<std::decay_t<DataT>>()[std::declval<index_t>()])>;
+                                       { data[i] };
+                                   }) {
+                  if constexpr (internals::is_pair_v<   // check if subscripting DataT returns a tuple
+                                  std::decay_t<decltype(std::declval<DataT>()[std::declval<index_t>()])>>) {
+                      // check the tuple is indeed ammisible for plain_data_layer
+                      return is_valid_pair_v<decltype(std::declval<std::decay_t<DataT>>()[std::declval<index_t>()])>;
+                  } else {
+                      return false;
+                  }
               } else {
                   return false;
               }
@@ -454,7 +504,9 @@ template <int Order_> class plain_data_layer {
           },
           data...);
     }
-    template <typename LayerType> plain_data_layer(const plain_row_filter<LayerType>& filter) {
+    template <typename LayerType>
+    plain_data_layer(const plain_row_filter<LayerType>& row_filter, const std::vector<std::string>& cols) {
+        fdapde_assert(cols.size() > 0);
         // for each type id, the number of columns of that type
         std::unordered_map<dtype, int> type_id_cnt {
           {dtype::flt64, 0},
@@ -465,13 +517,14 @@ template <int Order_> class plain_data_layer {
           {dtype::str,   0}
         };
         // push column descriptors
-        rows_ = filter.rows();
-	cols_ = filter.cols();
+        rows_ = row_filter.rows();	
+	cols_ = cols.size();
         for (int i = 0; i < cols_; ++i) {
-            fields_.push_back(filter.field_descriptors()[i]);
+            internals::dtype type_id = row_filter.field_descriptor(cols[i]).type_id;
+            fields_.emplace_back(cols[i], type_id_cnt[type_id], type_id);
             type_id_cnt[fields_.back().type_id]++;
             colname_to_field_[fields_.back().colname] = fields_.size() - 1;
-        }
+        }	
         // reserve space, copy data in internal storage
         std::apply(
           [&](const auto&... ts) {
@@ -482,10 +535,12 @@ template <int Order_> class plain_data_layer {
 		    int col_id_ = 0;
                     if (type_id_cnt[dtype_.type_id] != 0) {
                         fetch_<T>(data_).resize(rows_, type_id_cnt[dtype_.type_id]);
-                        for (const auto& desc : filter.field_descriptors()) {
+                        for (const auto& colname : cols) {
+                            auto desc = row_filter.field_descriptor(colname);
                             if (desc.type_id == dtype_.type_id) {
-                                auto slice = fetch_<T>(data_).template slice<1>(col_id_);
-                                for (int i = 0; i < rows_; ++i) { slice(i) = filter(i).template get<T>(desc.colname); }
+                                auto dst = fetch_<T>(data_).template slice<1>(col_id_);
+                                auto src = row_filter.template get<T>(desc.colname);
+                                for (int i = 0; i < rows_; ++i) { dst(i) = src(i); }
                                 col_id_++;
                             }
                         }
@@ -495,6 +550,9 @@ template <int Order_> class plain_data_layer {
           },
           types {});
     }
+    template <typename LayerType>
+    plain_data_layer(const plain_row_filter<LayerType>& row_filter) :
+        plain_data_layer(row_filter, row_filter.colnames()) { }
 
     // observers
     const field& field_descriptor(const std::string& colname) const { return fields_[colname_to_field_.at(colname)]; }
@@ -503,6 +561,12 @@ template <int Order_> class plain_data_layer {
         std::vector<std::string> colnames_;
         for (int i = 0, n = fields_.size(); i < n; ++i) { colnames_.push_back(fields_[i].colname); }
         return colnames_;
+    }
+    bool contains(const std::string& column) const {   // true if this layer contains column
+        for (int i = 0, n = fields_.size(); i < n; ++i) {
+            if (fields_[i].colname == column) { return true; }
+        }
+        return false;
     }
     size_t rows() const { return rows_; }
     size_t cols() const { return cols_; }
@@ -608,25 +672,25 @@ template <int Order_> class plain_data_layer {
         fetch_<SrcType>(data_).template slice<1>(col).assign_inplace_from(src);
 	cols_++;
         return;
-    }
-  
+    }  
     // output stream
     friend std::ostream& operator<<(std::ostream& os, const plain_data_layer& data) {
         std::vector<std::vector<std::string>> out;
         std::vector<std::size_t> max_size(data.field_descriptors().size(), 0);
-        out.resize(data.field_descriptors().size());
+	int n_rows = std::min(size_t(8), data.rows());
+        out.resize(data.cols());
         auto print =
           [&]<typename T>(std::vector<std::string>& out, const std::string& typestring, const std::string& colname) {
               out.push_back(colname);
               out.push_back(typestring);
               auto col = data.col<T>(colname);
               if constexpr (!std::is_same_v<T, std::string>) {
-                  for (int i = 0; i < 8; ++i) { out.push_back(std::to_string(col(i))); }   // convert value to string
+                  for (int i = 0; i < n_rows; ++i) { out.push_back(std::to_string(col(i))); }
               } else {
-                  for (int i = 0; i < 8; ++i) { out.push_back(col(i)); }
+                  for (int i = 0; i < n_rows; ++i) { out.push_back(col(i)); }
               }
           };
-        for (int i = 0, n = data.field_descriptors().size(); i < n; ++i) {
+        for (int i = 0, n = data.cols(); i < n; ++i) {
             const std::string& colname = data.field_descriptors()[i].colname;
             dtype coltype = data.field_descriptors()[i].type_id;
             if (coltype == dtype::flt64) { print.template operator()<double      >(out[i], "<flt64>", colname); }
@@ -637,20 +701,20 @@ template <int Order_> class plain_data_layer {
             if (coltype == dtype::str)   { print.template operator()<std::string >(out[i], "<str>"  , colname); }
         }
         // pretty format
-        for (int i = 0, n = data.field_descriptors().size(); i < n; ++i) {
+        for (int i = 0, n = data.cols(); i < n; ++i) {
             for (int j = 0, m = out[i].size(); j < m; ++j) { max_size[i] = std::max(max_size[i], out[i][j].size()); }
         }
-        for (int i = 0, n = data.field_descriptors().size(); i < n; ++i) {
+        for (int i = 0, n = data.cols(); i < n; ++i) {
             for (int j = 0, m = out[i].size(); j < m; ++j) {
                 out[i][j].append(max_size[i] - out[i][j].size() + 1, ' ');
             }
         }
 	// send to output stream
         for (int j = 0, m = out[0].size(); j < m - 1; ++j) {
-            for (int i = 0, n = data.field_descriptors().size(); i < n; ++i) { os << out[i][j]; }
+            for (int i = 0, n = data.cols(); i < n; ++i) { os << out[i][j]; }
             os << std::endl;
         }
-        for (int i = 0, n = data.field_descriptors().size(); i < n; ++i) { os << out[i][out[0].size() - 1]; }
+        for (int i = 0, n = data.cols(); i < n; ++i) { os << out[i][out[0].size() - 1]; }
         return os;
     }
    private:

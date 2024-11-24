@@ -193,7 +193,7 @@ template <int M, int N, typename Derived> class TriangulationBase {
         return boundary_node_iterator(n_nodes_, static_cast<const Derived*>(this));
     }
     // random sample points in triangulation
-    DMatrix<double> sample(int n_samples, int seed = fdapde::random_seed) {
+    DMatrix<double> sample(int n_samples, int seed = fdapde::random_seed) const {
         // set up random number generation
         int seed_ = (seed == fdapde::random_seed) ? std::random_device()() : seed;
         std::mt19937 rng(seed_);
@@ -212,7 +212,7 @@ template <int M, int N, typename Derived> class TriangulationBase {
             coords.row(i) = t * e.node(0) + (1 - t) * e.node(1);
             for (int j = 1; j < local_dim; ++j) {
                 t = rand_real(rng);
-                coords.row(i) = (1 - t) * e.node(1 + j) + t * coords.row(i);
+                coords.row(i) = (1 - t) * e.node(1 + j).transpose() + t * coords.row(i);
             }
         }
         return coords;

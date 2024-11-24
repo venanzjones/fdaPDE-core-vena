@@ -415,7 +415,7 @@ class dbf_reader {
             values.reserve(data_.at(colname).size());
             for (const auto& v : data_.at(colname)) {
                 std::string tmp = v;
-                std::erase(tmp, ' ');   // remove spaces
+                tmp.erase(tmp.find_last_not_of(" \n\r\t") + 1);   // trim the string
                 if (tmp.empty()) {
                     values.push_back("<NA>");
                 } else {

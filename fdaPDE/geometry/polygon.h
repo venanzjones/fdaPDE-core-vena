@@ -64,7 +64,7 @@ template <int LocalDim, int EmbedDim> class Polygon {
         return triangulation_.locate(p) != -1;
     }
     // random sample points in polygon
-    DMatrix<double> sample(int n_samples, int seed = fdapde::random_seed) {
+    DMatrix<double> sample(int n_samples, int seed = fdapde::random_seed) const {
         return triangulation_.sample(n_samples, seed);
     }
    private:
@@ -439,7 +439,7 @@ template <int LocalDim, int EmbedDim> class MultiPolygon {
         return triangulation_.locate(p) != -1;
     }
     // random sample points in polygon
-    DMatrix<double> sample(int n_samples, int seed = fdapde::random_seed) {
+    DMatrix<double> sample(int n_samples, int seed = fdapde::random_seed) const {
         return triangulation_.sample(n_samples, seed);
     }
    private:
