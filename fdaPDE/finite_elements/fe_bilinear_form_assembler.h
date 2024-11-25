@@ -63,10 +63,10 @@ class fe_bilinear_form_assembly_loop :
 
     using Quadrature = std::conditional_t<
       (is_galerkin || sizeof...(Quadrature_) > 0), typename Base::Quadrature,
-      higher_order_fe_quadrature_t<
-        typename TrialFeType::template select_cell_quadrature_t<local_dim>,
-        typename TestFeType ::template select_cell_quadrature_t<local_dim>>>;
-    static constexpr int n_quadrature_nodes = Quadrature::n_nodes;
+      higher_degree_fe_quadrature_t<
+        typename TrialFeType::template cell_quadrature_t<local_dim>,
+        typename TestFeType ::template cell_quadrature_t<local_dim>>>;
+    static constexpr int n_quadrature_nodes = Quadrature::order;
 
     // selected Quadrature could be different than Base::Quadrature, evaluate trial and (re-evaluate) test functions
     static constexpr auto test_shape_values_  = Base::template eval_shape_values<Quadrature, test_fe_traits >();
@@ -80,13 +80,15 @@ class fe_bilinear_form_assembly_loop :
     constexpr const DofHandler<local_dim, embed_dim>* trial_dof_handler() const {
         return is_galerkin ? Base::dof_handler_ : trial_dof_handler_;
     }
+    const TrialSpace* trial_space_;
    public:
     fe_bilinear_form_assembly_loop() = default;
     fe_bilinear_form_assembly_loop(
       const Form_& form, typename Base::fe_traits::geo_iterator begin, typename Base::fe_traits::geo_iterator end,
-      const Quadrature_&... quadrature) requires(sizeof...(quadrature) <= 1)
-        : Base(form, begin, end, quadrature...) {
-        if constexpr (is_petrov_galerkin) { trial_dof_handler_ = &trial_space(form_).dof_handler(); }
+      const Quadrature_&... quadrature)
+        requires(sizeof...(quadrature) <= 1)
+        : Base(form, begin, end, quadrature...), trial_space_(&internals::trial_space(form_)) {
+        if constexpr (is_petrov_galerkin) { trial_dof_handler_ = &internals::trial_space(form_).dof_handler(); }
         fdapde_assert(test_dof_handler()->n_dofs() != 0 && trial_dof_handler()->n_dofs() != 0);
     }
 
@@ -176,6 +178,7 @@ class fe_bilinear_form_assembly_loop :
     constexpr int n_dofs() const { return trial_dof_handler()->n_dofs(); }
     constexpr int rows() const { return test_dof_handler()->n_dofs(); }
     constexpr int cols() const { return trial_dof_handler()->n_dofs(); }
+    constexpr const TrialSpace& trial_space() const { return *trial_space_; }
 };
 
 
@@ -183,10 +186,10 @@ class fe_bilinear_form_assembly_loop :
 template <typename DofHandler, typename FeType> class scalar_fe_grad_grad_assembly_loop {
     static constexpr int local_dim = DofHandler::local_dim;
     static constexpr int embed_dim = DofHandler::embed_dim;
-    using Quadrature = typename FeType::template select_cell_quadrature_t<local_dim>;
+    using Quadrature = typename FeType::template cell_quadrature_t<local_dim>;
     using cell_dof_descriptor = FeType::template cell_dof_descriptor<local_dim>;
     using BasisType = typename cell_dof_descriptor::BasisType;
-    static constexpr int n_quadrature_nodes = Quadrature::n_nodes;
+    static constexpr int n_quadrature_nodes = Quadrature::order;
     static constexpr int n_basis = BasisType::n_basis;
     static constexpr int n_components = FeType::n_components;
     fdapde_static_assert(n_components == 1, THIS_CLASS_IS_FOR_SCALAR_FINITE_ELEMENTS_ONLY);

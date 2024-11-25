@@ -116,12 +116,12 @@ template <typename FeSpace_, typename... Quadrature_> struct fe_face_assembler_t
     static constexpr int n_basis = BasisType::n_basis;  
     using Quadrature = decltype([]() {
         if constexpr (sizeof...(Quadrature_) == 0) {
-            return typename FeType::template select_face_quadrature_t<local_dim> {};
+            return typename FeType::template face_quadrature_t<local_dim> {};
         } else {
             return std::get<0>(std::tuple<Quadrature_...>());
         }
     }());
-    static constexpr int n_quadrature_nodes = Quadrature::n_nodes;
+    static constexpr int n_quadrature_nodes = Quadrature::degree;
     fdapde_static_assert(
       internals::is_fe_quadrature_simplex<Quadrature>, SUPPLIED_QUADRATURE_FORMULA_IS_NOT_FOR_SIMPLEX_INTEGRATION);
     using geo_iterator = typename Triangulation<local_dim, embed_dim>::boundary_iterator;
@@ -140,12 +140,12 @@ template <typename FeSpace_, typename... Quadrature_> struct fe_cell_assembler_t
     static constexpr int n_basis = BasisType::n_basis;  
     using Quadrature = decltype([]() {
         if constexpr (sizeof...(Quadrature_) == 0) {
-            return typename FeType::template select_cell_quadrature_t<local_dim> {};
+            return typename FeType::template cell_quadrature_t<local_dim> {};
         } else {
             return std::get<0>(std::tuple<Quadrature_...>());
         }
     }());
-    static constexpr int n_quadrature_nodes = Quadrature::n_nodes;
+    static constexpr int n_quadrature_nodes = Quadrature::degree;
     fdapde_static_assert(
       internals::is_fe_quadrature_simplex<Quadrature>, SUPPLIED_QUADRATURE_FORMULA_IS_NOT_FOR_SIMPLEX_INTEGRATION);
     using geo_iterator = typename Triangulation<local_dim, embed_dim>::cell_iterator;
@@ -177,7 +177,7 @@ struct fe_assembler_base {
     using Quadrature = typename fe_traits::Quadrature;
     using dof_descriptor = typename fe_traits::dof_descriptor;
     using BasisType = typename dof_descriptor::BasisType;
-    static constexpr int n_quadrature_nodes = Quadrature::n_nodes;
+    static constexpr int n_quadrature_nodes = Quadrature::order;
     static constexpr int n_basis = BasisType::n_basis;
     static constexpr int n_components = FunctionSpace::n_components;
   
@@ -200,21 +200,23 @@ struct fe_assembler_base {
                 return Quadrature {};
             }
         }()),
-        dof_handler_(&test_space(form_).dof_handler()),
+        dof_handler_(&internals::test_space(form_).dof_handler()),
+        test_space_(&internals::test_space(form_)),
         begin_(begin),
         end_(end) {
         fdapde_assert(dof_handler_->n_dofs() > 0);
     }
+    const TestSpace& test_space() const { return *test_space_; }
    protected:
     // compile-time evaluation of \psi_i(q_j), i = 1, ..., n_basis, j = 1, ..., n_quadrature_nodes
     template <typename Quadrature__, typename fe_traits__>
     static consteval MdArray<
-      double, MdExtents<fe_traits__::n_basis, Quadrature__::n_nodes, fe_traits__::n_components>>
+      double, MdExtents<fe_traits__::n_basis, Quadrature__::order, fe_traits__::n_components>>
     eval_shape_values() {
         using BasisType = typename fe_traits__::BasisType;
 	using dof_descriptor = typename fe_traits__::dof_descriptor;
         constexpr int n_basis = BasisType::n_basis;
-        constexpr int n_quadrature_nodes = Quadrature__::n_nodes;
+        constexpr int n_quadrature_nodes = Quadrature__::order;
 	constexpr int n_components = fe_traits__::n_components;
 	
         MdArray<double, MdExtents<n_basis, n_quadrature_nodes, n_components>> shape_values_ {};
@@ -235,12 +237,12 @@ struct fe_assembler_base {
     // aligness reasons (essentially, to allow contiguous access of components' gradients)
     template <typename Quadrature__, typename fe_traits__>
     static consteval MdArray<
-      double, MdExtents<fe_traits__::n_basis, Quadrature__::n_nodes, fe_traits__::n_components, local_dim>>
+      double, MdExtents<fe_traits__::n_basis, Quadrature__::order, fe_traits__::n_components, local_dim>>
     eval_shape_grads() {
         using BasisType = typename fe_traits__::BasisType;
 	using dof_descriptor = typename fe_traits__::dof_descriptor;
         constexpr int n_basis = BasisType::n_basis;
-        constexpr int n_quadrature_nodes = Quadrature__::n_nodes;
+        constexpr int n_quadrature_nodes = Quadrature__::order;
         constexpr int n_components = fe_traits__::n_components;
 	
         MdArray<double, MdExtents<n_basis, n_quadrature_nodes, n_components, local_dim>> shape_grad_ {};
@@ -339,6 +341,7 @@ struct fe_assembler_base {
     Form form_;
     Quadrature quadrature_ {};
     const DofHandler<local_dim, embed_dim>* dof_handler_;
+    const TestSpace* test_space_;
     typename fe_traits::geo_iterator begin_, end_;
 };
     

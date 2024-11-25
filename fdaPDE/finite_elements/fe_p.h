@@ -215,8 +215,8 @@ template <int Order, int NComponents> struct FeP {
     };
     template <int LocalDim> using cell_dof_descriptor = dof_descriptor<LocalDim>;
     template <int LocalDim> using face_dof_descriptor = dof_descriptor<LocalDim - 1>;
-    template <int LocalDim> using select_cell_quadrature_t = typename select_cell_quadrature<LocalDim>::type;
-    template <int LocalDim> using select_face_quadrature_t = typename select_cell_quadrature<LocalDim - 1>::type;
+    template <int LocalDim> using cell_quadrature_t = typename select_cell_quadrature<LocalDim>::type;
+    template <int LocalDim> using face_quadrature_t = typename select_cell_quadrature<LocalDim - 1>::type;
 };
 
 // template specialization for P0 elements
@@ -278,8 +278,8 @@ template <int NComponents> struct FeP<0, NComponents> {
     struct select_cell_quadrature : std::type_identity<internals::fe_quadrature_simplex<LocalDim, 1>> { };
     template <int LocalDim> using cell_dof_descriptor = dof_descriptor<LocalDim>;
     template <int LocalDim> using face_dof_descriptor = dof_descriptor<LocalDim - 1>;
-    template <int LocalDim> using select_cell_quadrature_t = typename select_cell_quadrature<LocalDim>::type;
-    template <int LocalDim> using select_face_quadrature_t = typename select_cell_quadrature<LocalDim - 1>::type;
+    template <int LocalDim> using cell_quadrature_t = typename select_cell_quadrature<LocalDim>::type;
+    template <int LocalDim> using face_quadrature_t = typename select_cell_quadrature<LocalDim - 1>::type;
 };
 
 // lagrange finite element alias

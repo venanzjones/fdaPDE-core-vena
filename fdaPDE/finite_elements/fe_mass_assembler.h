@@ -29,10 +29,10 @@ class fe_mass_assembly_loop {
     static constexpr int local_dim = LhsFeSpace::local_dim;
     static constexpr int embed_dim = LhsFeSpace::embed_dim;
     // select the quadrature which optimally integrates the highest order finite element
-    using Quadrature = higher_order_fe_quadrature_t<
-      typename LhsFeSpace::template select_cell_quadrature_t<local_dim>,
-      typename RhsFeSpace::template select_cell_quadrature_t<local_dim>>;
-    static constexpr int n_quadrature_nodes = Quadrature::n_nodes;
+    using Quadrature = higher_degree_fe_quadrature_t<
+      typename LhsFeSpace::template cell_quadrature_t<local_dim>,
+      typename RhsFeSpace::template cell_quadrature_t<local_dim>>;
+    static constexpr int n_quadrature_nodes = Quadrature::order;
     using lhs_cell_dof_descriptor = LhsFeSpace::template cell_dof_descriptor<local_dim>;
     using rhs_cell_dof_descriptor = RhsFeSpace::template cell_dof_descriptor<local_dim>;
     using LhsBasisType = typename lhs_cell_dof_descriptor::BasisType;

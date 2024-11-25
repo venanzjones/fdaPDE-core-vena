@@ -102,8 +102,6 @@ struct vector_test_function_impl : public fdapde::MatrixBase<FeSpace_::local_dim
         constexpr int input_size() const { return StaticInputSize; }
         constexpr int size() const { return rows() * cols(); }
         constexpr const Derived& derived() const { return xpr_; }
-        // constexpr const TestSpace& fe_space() const { return xpr_.fe_space(); }
-        // constexpr TestSpace& fe_space() { return xpr_.fe_space(); }
        private:
         typename internals::ref_select<const Derived>::type xpr_;
     };
@@ -122,8 +120,6 @@ struct vector_test_function_impl : public fdapde::MatrixBase<FeSpace_::local_dim
         constexpr Scalar operator()(const InputType& fe_packet) const { return fe_packet.test_div; }
         constexpr int input_size() const { return StaticInputSize; }
         constexpr const Derived& derived() const { return xpr_; }
-        // constexpr const TestSpace& fe_space() const { return xpr_.fe_space(); }
-        // constexpr TestSpace& fe_space() { return xpr_.fe_space(); }
        private:
         typename internals::ref_select<const Derived>::type xpr_;
     };
@@ -197,7 +193,6 @@ struct vector_trial_function_impl : public fdapde::MatrixBase<FeSpace_::local_di
     constexpr vector_trial_function_impl(FeSpace_& fe_space) noexcept : fe_space_(&fe_space) { }
 
     template <typename Derived_> struct Jacobian : fdapde::MatrixBase<TrialSpace::local_dim, Jacobian<Derived_>> {
-        // using TrialSpace = std::decay_t<FeSpace_>;
         using Derived = Derived_;
         template <typename T> using Meta = Jacobian<T>;
         using InputType = internals::fe_assembler_packet<TrialSpace::local_dim>;
@@ -216,13 +211,10 @@ struct vector_trial_function_impl : public fdapde::MatrixBase<FeSpace_::local_di
         constexpr int input_size() const { return StaticInputSize; }
         constexpr int size() const { return rows() * cols(); }
         constexpr const Derived& derived() const { return xpr_; }
-        // constexpr const TrialSpace& fe_space() const { return xpr_.fe_space(); }
-        // constexpr TrialSpace& fe_space() { return xpr_.fe_space(); }
        private:
         typename internals::ref_select<const Derived>::type xpr_;
     };
     template <typename Derived_> struct Divergence : fdapde::ScalarBase<TrialSpace::local_dim, Divergence<Derived_>> {
-        // using TrialSpace = std::decay_t<FeSpace_>;
         using Derived = Derived_;
         template <typename T> using Meta = Divergence<T>;
         using InputType = internals::fe_assembler_packet<TrialSpace::local_dim>;
@@ -236,8 +228,6 @@ struct vector_trial_function_impl : public fdapde::MatrixBase<FeSpace_::local_di
         constexpr Scalar operator()(const InputType& fe_packet) const { return fe_packet.trial_div; }
         constexpr int input_size() const { return StaticInputSize; }
         constexpr const Derived& derived() const { return xpr_; }
-        // constexpr const TrialSpace& fe_space() const { return xpr_.fe_space(); }
-        // constexpr TrialSpace& fe_space() { return xpr_.fe_space(); }
        private:
         typename internals::ref_select<const Derived>::type xpr_;
     };
@@ -306,14 +296,14 @@ struct TrialFunction : public std::conditional_t<
     // norm evaluation
     double l2_squared_norm() {
         internals::fe_mass_assembly_loop<typename TrialSpace::FeType> assembler(Base::fe_space_->dof_handler());
-        return coeff_.dot(assembler.run() * coeff_);
+        return coeff_.dot(assembler.assemble() * coeff_);
     }
     double l2_norm() { return std::sqrt(l2_squared_norm()); }
     double h1_squared_norm() const {   // Sobolev H^1 norm of finite element function
         TrialFunction u(*Base::fe_space_);
         TestFunction  v(*Base::fe_space_);
         auto assembler = integrate(*Base::fe_space_->triangulation())(u * v + inner(grad(u), grad(v)));
-        return coeff_.dot(assembler.run() * coeff_);
+        return coeff_.dot(assembler.assemble() * coeff_);
     }
     double h1_norm() const { return std::sqrt(h1_squared_norm()); }
     const DVector<double>& coeff() const { return coeff_; }
@@ -384,7 +374,7 @@ class FeFunction :
         } else {
             value = OutputType::Zero();
         }
-        for (int i = 0, n = fe_space_->n_basis(); i < n; ++i) {
+        for (int i = 0, n = fe_space_->n_shape_functions(); i < n; ++i) {
             value += coeff_[active_dofs[i]] * fe_space_->eval_shape_function(i, ref_p);
         }
         return value;
@@ -398,7 +388,7 @@ class FeFunction :
         InputType ref_p = cell.invJ() * (p - cell.node(0));
         DVector<int> active_dofs = cell.dofs();
         Scalar value = 0;
-        for (int j = 0, n = fe_space_->n_basis(); j < n; ++j) {
+        for (int j = 0, n = fe_space_->n_shape_functions(); j < n; ++j) {
 	  value += coeff_[active_dofs[j]] * fe_space_->eval_shape_function(j, ref_p)[i];
         }
         return value;

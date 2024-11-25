@@ -44,39 +44,41 @@ template <typename Triangulation_, typename FeType_> class FeSpace {
         cell_basis_ = BasisType(unit_cell_dofs_.dofs_phys_coords());
         face_basis_ = typename face_dof_descriptor::BasisType(unit_face_dofs_.dofs_phys_coords());
     }
-    // getters
+    // observers
     const Triangulation& triangulation() const { return *triangulation_; }
     const DofHandlerType& dof_handler() const { return dof_handler_; }
     DofHandlerType& dof_handler() { return dof_handler_; }
-  constexpr int n_basis() const { return n_components * cell_basis_.size(); } // this referes to basis over reference cell, change in n_shape_functions
-  constexpr int n_basis_face() const { return n_components * face_basis_.size(); } // over reference cells, change in n_shape_functions_face
-  // we should also return a global number of basis over the whole domain
+    constexpr int n_shape_functions() const { return n_components * cell_basis_.size(); }
+    constexpr int n_shape_functions_face() const { return n_components * face_basis_.size(); }
     int n_dofs() const { return dof_handler_.n_dofs(); }
+    const BasisType& cell_basis() const { return cell_basis_; }
+    const typename face_dof_descriptor::BasisType& face_basis() const { return face_basis_; }
 
-  // we might return directly the shape function on reference cell and reference face (no need for all those methods)
-  // on a FeSpace, a basis function is defined over the whole domain
-
-  // need to modify FeFunction
-  
-    template <typename InputType> constexpr auto eval_shape_value(int i, const InputType& p) const {
-        return cell_basis_[i](p);
-    }
-    template <typename InputType> constexpr auto eval_shape_grad(int i, const InputType& p) const {
+    // evaluation
+    template <typename T> constexpr auto eval_shape_value(int i, const T& p) const { return cell_basis_[i](p); }
+    template <typename T> constexpr auto eval_shape_grad(int i, const T& p) const {
         return cell_basis_[i].gradient()(p);
     }
-    template <typename InputType> constexpr auto eval_shape_div(int i, const InputType& p) const {
+    template <typename T> constexpr auto eval_shape_div(int i, const T& p) const {
         fdapde_static_assert(n_components > 1, THIS_METHOD_IS_FOR_VECTOR_FINITE_ELEMENTS_ONLY);
         return cell_basis_[i].divergence()(p);
     }
-    template <typename InputType> constexpr auto eval_face_shape_value(int i, const InputType& p) const {
-        return face_basis_[i](p);
-    }
-    template <typename InputType> constexpr auto eval_face_shape_grad(int i, const InputType& p) const {
+    template <typename T> constexpr auto eval_face_shape_value(int i, const T& p) const { return face_basis_[i](p); }
+    template <typename T> constexpr auto eval_face_shape_grad(int i, const T& p) const {
         return face_basis_[i].gradient()(p);
     }
-    template <typename InputType> constexpr auto eval_face_shape_div(int i, const InputType& p) const {
+    template <typename T> constexpr auto eval_face_shape_div(int i, const T& p) const {
         fdapde_static_assert(n_components > 1, THIS_METHOD_IS_FOR_VECTOR_FINITE_ELEMENTS_ONLY);
         return face_basis_[i].divergence()(p);
+    }
+    template <typename T> auto eval_cell_value(int i, const T& p) const {
+        // localize p in physical domain
+        int e_id = triangulation_->locate(p);
+        if (e_id == -1) return std::numeric_limits<double>::quiet_NaN();
+        // map p to reference cell and evaluate
+        typename DofHandler<local_dim, embed_dim>::CellType cell = dof_handler_.cell(e_id);
+        T ref_p = cell.invJ() * (p - cell.node(0));
+        return eval_shape_value(i, ref_p);
     }
    private:
     const Triangulation* triangulation_;

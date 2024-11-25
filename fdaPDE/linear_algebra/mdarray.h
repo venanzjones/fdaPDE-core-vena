@@ -331,7 +331,7 @@ struct layout_right {   // corresponds to a RowMajor storage for order 2 mdarray
 };
 
 }   // namespace internals
-
+  
 // a multidimensional view of a multidimensional MdArray
 template <typename MdArray, typename BlkExtents> class MdArrayBlock { 
    public:
@@ -710,12 +710,22 @@ template <typename MdArray, int... Slicers> class MdArraySlice {
         if constexpr (!std::is_pointer_v<Src>) fdapde_assert(src.size() == size());
         if constexpr (contiguous_access) {
             // for pointer types, this could lead to ub. is caller responsibility to guarantee bounded access
-            for (int i = 0; i < size(); ++i) { operator[](i) = src[i]; }
+            for (int i = 0, n = size(); i < n; ++i) { operator[](i) = src[i]; }
         } else {
             int i = 0;
             for (auto& v : *this) v = src[i++];
         }
         return *this;
+    }
+    template <typename Dst>
+        requires(fdapde::is_subscriptable<Dst, int>)
+    void assign_to(Dst& dst) {
+        if constexpr (contiguous_access) {
+            for (int i = 0, n = size(); i < n; ++i) { dst[i] = operator[](i); }
+        } else {
+            int i = 0;
+            for (auto& v : *this) dst[i++] = v;
+        }
     }
    private:
     std::array<index_t, Order> internal_stride_;
@@ -1059,7 +1069,7 @@ template <typename Scalar_, typename Extents_, typename LayoutPolicy_ = internal
     mapping_t mapping_ {};
     storage_t data_ {};
 };
-
+  
 }   // namespace fdapde
 
 #endif   // __MDARRAY_H__

@@ -18,6 +18,7 @@
 #define __CONSTEXPR_MATRIX_H__
 
 #include <array>
+#include "../utils/symbols.h"
 
 namespace fdapde {
 namespace cexpr {

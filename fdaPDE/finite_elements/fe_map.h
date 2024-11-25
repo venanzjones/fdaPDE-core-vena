@@ -123,7 +123,7 @@ struct FeMap<FeFunction<FeSpace>> :
                 SVector<FeSpace::local_dim> ref_node = cell.invJ() * (nodes.row(i).transpose() - cell.node(0));
                 DVector<int> active_dofs = cell.dofs();
                 Scalar value = 0;
-                for (int i = 0, n = xpr_->fe_space().n_basis(); i < n; ++i) {
+                for (int i = 0, n = xpr_->fe_space().n_shape_functions(); i < n; ++i) {
                     value += xpr_->coeff()[active_dofs[i]] * xpr_->fe_space().eval(i, ref_node);
                 }
                 mapped(i, 0) = value;
