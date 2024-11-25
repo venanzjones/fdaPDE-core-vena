@@ -63,6 +63,7 @@ template <typename GeoFrame_> struct areal_layer {
         data_ = storage_t(std::forward<DataT>(data)...);
     }
     storage_t& data() { return data_; }
+    const storage_t& data() const { return data_; }
     // geometry
     const MultiPolygon<local_dim, embed_dim>& geometry(int i) const { return regions_->operator[](i); }
     // computes measures of subdomains

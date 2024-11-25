@@ -179,6 +179,7 @@ template <typename Scalar_, typename DataLayer> struct plain_col_view {
     size_t cols() const { return 1; }
     size_t size() const { return data_->rows(); }
     index_t id() const { return col_; }
+    const storage_t& data() const { return slice_; }
     const auto& field_descriptor() const { return data_->field_descriptor(colname_); }
     const std::string& colname() const { return colname_; }
     internals::dtype type_id() const { return type_id_; }

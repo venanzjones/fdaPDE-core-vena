@@ -61,7 +61,7 @@ template <typename GeoFrame_> struct point_layer {
     }
     storage_t& data() { return data_; }
     const storage_t& data() const { return data_; }
-  
+    // geometry
     const DMatrix<double>& coordinates() const { return coords_ ? *coords_ : triangulation().nodes(); }
     Triangulation<local_dim, embed_dim>& triangulation() { return geoframe_->triangulation(); }
     const Triangulation<local_dim, embed_dim>& triangulation() const { return geoframe_->triangulation(); }
