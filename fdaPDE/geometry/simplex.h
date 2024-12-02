@@ -30,15 +30,15 @@ namespace fdapde {
 // The convex-hull of EmbedDim_ + 1 points in \mathbb{R}^EmbedDim.
 // A point (Order 0), line (Order 1), triangle (Order 2), tetrahedron (Order 3) embedded in \mathbb{R}^EmbedDim
 template <int Order_, int EmbedDim_> class Simplex {
-    static_assert(EmbedDim_ != 0 && Order_ <= 3);
+    static_assert(Order_ >= 0 && Order_ <= 3);
    public:
     static constexpr int local_dim = Order_;
     static constexpr int embed_dim = EmbedDim_;
     static constexpr int n_nodes = Order_ + 1;
-    static constexpr int n_edges = (Order_ * (Order_ + 1)) / 2;
-    static constexpr int n_faces = Order_ + 1;
+    static constexpr int n_edges = Order_ == 0 ? 0 : (Order_ * (Order_ + 1)) / 2;
+    static constexpr int n_faces = Order_ == 0 ? 0 : Order_ + 1;
     static constexpr int n_nodes_per_face = Order_;
-    using BoundaryCellType = Simplex<Order_ - 1, EmbedDim_>;
+    using BoundaryCellType = std::conditional_t<Order_ == 0, Simplex<0, EmbedDim_>, Simplex<Order_ - 1, EmbedDim_>>;
     using NodeType = SVector<embed_dim>;
 
     Simplex() = default;

@@ -40,7 +40,7 @@ class fe_bilinear_form_assembly_loop :
     static constexpr int local_dim = Base::local_dim;
     static constexpr int embed_dim = Base::embed_dim;
     using Base::form_;
-
+   public:
     // as trial and test spaces could be different, we here need to redefine some properties of Base
     // trial space properties
     using TrialFeType = typename TrialSpace::FeType;
@@ -67,7 +67,7 @@ class fe_bilinear_form_assembly_loop :
         typename TrialFeType::template cell_quadrature_t<local_dim>,
         typename TestFeType ::template cell_quadrature_t<local_dim>>>;
     static constexpr int n_quadrature_nodes = Quadrature::order;
-
+   private:
     // selected Quadrature could be different than Base::Quadrature, evaluate trial and (re-evaluate) test functions
     static constexpr auto test_shape_values_  = Base::template eval_shape_values<Quadrature, test_fe_traits >();
     static constexpr auto trial_shape_values_ = Base::template eval_shape_values<Quadrature, trial_fe_traits>();

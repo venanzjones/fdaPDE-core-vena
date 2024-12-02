@@ -86,7 +86,7 @@ template <typename Triangulation> class Triangle : public Simplex<Triangulation:
             return *this;
         }
        public:
-        edge_iterator(int index, const Triangle* t) : Base(index, 0, t_->n_edges), t_(t) {
+        edge_iterator(int index, const Triangle* t) : Base(index, 0, t->n_edges), t_(t) {
             if (index_ < t_->n_edges) operator()(index_);
         }
     };

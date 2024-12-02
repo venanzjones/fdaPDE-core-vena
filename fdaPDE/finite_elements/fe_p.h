@@ -107,7 +107,8 @@ template <int Order, int NComponents> struct FeP {
     static constexpr bool is_vector_fe = (n_components != 1);
     fdapde_static_assert(n_components > 0, DEFINITION_OF_FINITE_ELEMENT_WITH_ZERO_OR_LESS_COMPONENTS_IS_ILL_FORMED);
 
-    template <int LocalDim> struct dof_descriptor {
+    // dummy template argument enables template specialization of this nested template
+    template <int LocalDim, typename dummy = void> struct dof_descriptor {
         static constexpr int local_dim = LocalDim;
         using ReferenceCell = Simplex<local_dim, local_dim>;   // reference unit simplex
         static constexpr bool dof_sharing = true;              // piecewise continuous finite element
@@ -203,6 +204,22 @@ template <int Order, int NComponents> struct FeP {
         cexpr::Matrix<double, n_dofs_per_cell, local_dim> dofs_phys_coords_;       // dofs physical coordinates
         cexpr::Matrix<double, n_dofs_per_cell, local_dim + 1> dofs_bary_coords_;   // dofs barycentric coordinates
     };
+    // template specialization for boundary integration of 1D elements
+    template <typename dummy> struct dof_descriptor<0, dummy> {
+        static constexpr int local_dim = 0;
+        using ReferenceCell = Simplex<local_dim, local_dim>;
+        static constexpr bool dof_sharing = true;
+        static constexpr int fe_order = Order;
+        static constexpr int n_dofs_per_node = 1;
+        static constexpr int n_dofs_per_edge = 0;
+        static constexpr int n_dofs_per_face = 0;
+        static constexpr int n_dofs_internal = 0;
+        static constexpr int n_dofs_per_cell = 1;
+        static constexpr int dof_multiplicity = n_components;
+        using BasisType = std::conditional_t<
+          NComponents == 1, LagrangeBasis<0, Order>, internals::vector_fe_p_basis_type<0, Order, NComponents>>;
+    };
+  
     // select quadrature which optimally integrates (Order + 1) polynomials
     template <int LocalDim> class select_cell_quadrature {
         static constexpr int select_quadrature_() {

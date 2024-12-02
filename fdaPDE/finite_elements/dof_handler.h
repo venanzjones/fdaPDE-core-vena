@@ -23,6 +23,7 @@
 #include "../utils/symbols.h"
 #include "dof_tetrahedron.h"
 #include "dof_triangle.h"
+#include "dof_segment.h"
 #include "dof_constraints.h"
 
 namespace fdapde {
@@ -31,7 +32,9 @@ template <int LocalDim, int EmbedDim> class DofHandler;
 template <int LocalDim, int EmbedDim, typename Derived> class DofHandlerBase {
    public:
     using TriangulationType = Triangulation<LocalDim, EmbedDim>;
-    using CellType = std::conditional_t<LocalDim == 2, DofTriangle<Derived>, DofTetrahedron<Derived>>;
+    using CellType = std::conditional_t<
+      LocalDim == 1, DofSegment<Derived>,
+      std::conditional_t<LocalDim == 2, DofTriangle<Derived>, DofTetrahedron<Derived>>>;
     static constexpr int n_nodes_per_cell = TriangulationType::n_nodes_per_cell;
     static constexpr int local_dim = TriangulationType::local_dim;
     static constexpr int embed_dim = TriangulationType::embed_dim;
@@ -63,6 +66,9 @@ template <int LocalDim, int EmbedDim, typename Derived> class DofHandlerBase {
         return result;
     }
     DVector<int> active_dofs(int cell_id) const { return dofs_.row(cell_id); }   // dofs located on cell with ID cell_id
+    template <typename ContainerT> void active_dofs(int cell_id, ContainerT& dst) const {
+        for (int i = 0, n = dofs_.cols(); i < n; ++i) { dst.push_back(dofs_(cell_id, i)); }
+    }
     operator bool() const { return n_dofs_ != 0; }
     Eigen::Map<const DVector<int>> dofs_to_cell() const {
         return Eigen::Map<const DVector<int>>(dofs_to_cell_.data(), n_dofs_, 1);
@@ -480,7 +486,8 @@ template <> class DofHandler<3, 3> : public DofHandlerBase<3, 3, DofHandler<3, 3
     std::unordered_map<int, std::vector<int>> edge_to_dofs_;   // for each edge, the dofs which are not on its nodes
 
     // basic iterator type
-    template <typename Iterator, typename ValueType> class iterator : public internals::index_iterator<Iterator, ValueType> {
+    template <typename Iterator, typename ValueType>
+    class iterator : public internals::index_iterator<Iterator, ValueType> {
        protected:
         using Base = internals::index_iterator<Iterator, ValueType>;
         using Base::index_;
@@ -599,38 +606,73 @@ template <> class DofHandler<3, 3> : public DofHandlerBase<3, 3, DofHandler<3, 3
     }
 };
 
-// template <int EmbedDim> class DofHandler<1, EmbedDim> : public DofHandlerBase<1, EmbedDim, DofHandler<1, EmbedDim>> {
-//    private:
-//     using Base = DofHandlerBase<1, EmbedDim, DofHandler<1, EmbedDim>>;
-//     using TriangulationType = typename Base::TriangulationType;
-//     using CellType = DofHandlerCell<Segment<Triangulation<1, EmbedDim>>>;
-//     using Base::n_dofs_;
-//     using Base::triangulation_;
-//     int n_dofs_per_cell_ = 0, n_dofs_internal_per_cell_ = 0;
-//    public:
-//     DofHandler() = default;
-//     DofHandler(const TriangulationType& triangulation) : Base(triangulation) { }
+template <int EmbedDim> class DofHandler<1, EmbedDim> : public DofHandlerBase<1, EmbedDim, DofHandler<1, EmbedDim>> {
+   public:
+    using Base = DofHandlerBase<1, EmbedDim, DofHandler<1, EmbedDim>>;
+    using TriangulationType = typename Base::TriangulationType;
+    using CellType = typename Base::CellType;
+    using Base::dofs_;
+    using Base::n_dofs_;
+    using Base::triangulation_;
+    DofHandler() = default;
+    DofHandler(const TriangulationType& triangulation) : Base(triangulation) { }
 
-//     template <typename FEType> void enumerate(FEType fe) {
-//         Base::enumerate(fe);   // enumerate dofs at nodes
-//         n_dofs_internal_per_cell_ = FEType::n_dofs_internal;
-//         n_dofs_per_cell_ = TriangulationType::n_nodes_per_cell + n_dofs_internal_per_cell_;
-//         // insert additional dofs if requested by the finite element
-//         if constexpr (FEType::n_dofs_internal > 0) {
-//             for (typename TriangulationType::cell_iterator it = triangulation_->cells_begin();
-//                  it != triangulation_->cells_end(); ++it) {
-//                 for (int j = 0; j < FEType::n_dofs_internal; ++j) { dofs_(it->id(), n_nodes_per_cell + j) = n_dofs_++; }
-//             }
-//         }
-//         // update boundary
-//         Base::boundary_dofs_.resize(n_dofs_);
-//         Base::boundary_dofs_.topRows(triangulation_->n_nodes()) = triangulation_->boundary_nodes();
-//         return;
-//     }
-//     // getters
-//     int n_dofs_per_cell() const { return n_dofs_per_cell_; }
-//     int n_dofs_internal_per_cell() const { return n_dofs_internal_per_cell_; }
-// };
+    template <typename FEType> void enumerate(FEType fe) {
+        using dof_descriptor = typename FEType::cell_dof_descriptor<TriangulationType::local_dim>;
+        Base::enumerate(fe);   // enumerate dofs at nodes
+        n_dofs_internal_per_cell_ = dof_descriptor::n_dofs_internal;
+        n_dofs_per_node_ = dof_descriptor::n_dofs_per_node;
+        n_dofs_per_cell_ =
+          dof_descriptor::n_dofs_per_node * TriangulationType::n_nodes_per_cell + n_dofs_internal_per_cell_;
+	dof_multiplicity_ = dof_descriptor::dof_multiplicity;
+        // insert additional dofs if requested by the finite element
+        if constexpr (dof_descriptor::n_dofs_internal > 0) {
+            for (typename TriangulationType::cell_iterator it = triangulation_->cells_begin();
+                 it != triangulation_->cells_end(); ++it) {
+                for (int j = 0; j < dof_descriptor::n_dofs_internal; ++j) {
+                    dofs_(it->id(), n_dofs_per_node_ + j) = n_dofs_++;
+                }
+            }
+        }
+	Base::n_unique_dofs_ = n_dofs_;
+        // update boundary
+        Base::boundary_dofs_.resize(n_dofs_ * dof_descriptor::dof_multiplicity);
+	if constexpr (dof_descriptor::n_dofs_per_node > 0) {   // inherit boundary description from geometry
+            Base::boundary_dofs_.topRows(triangulation_->n_nodes()) = triangulation_->boundary_nodes();
+        } else {
+            // no dofs at nodes, an internal dof is on boundary if it is placed on a boundary cell
+            for (typename TriangulationType::cell_iterator it = triangulation_->cells_begin();
+                 it != triangulation_->cells_end(); ++it) {
+                if (it->on_boundary()) {
+                    for (int j = 0; j < n_dofs_per_cell_; ++j) { Base::boundary_dofs_.set(it->id(), j); }
+                }
+            }
+        }
+        // if dof_multiplicity is higher than one, replicate the computed dof numbering adding n_dofs_ to each dof
+        if constexpr (dof_descriptor::dof_multiplicity > 1) {
+            Base::dofs_to_cell_.resize(n_dofs_ * dof_descriptor::dof_multiplicity);
+            Base::dofs_markers_.resize(n_dofs_ * dof_descriptor::dof_multiplicity);
+            for (int i = 1; i < dof_descriptor::dof_multiplicity; ++i) {
+                dofs_.middleCols(i * dof_descriptor::n_dofs_per_cell, dof_descriptor::n_dofs_per_cell) =
+                  dofs_.leftCols(dof_descriptor::n_dofs_per_cell).array() + (i * n_dofs_);
+                Base::boundary_dofs_.middleRows(i * n_dofs_, n_dofs_) = Base::boundary_dofs_.topRows(n_dofs_);
+                for (int j = 0; j < n_dofs_; ++j) {
+                    Base::dofs_to_cell_[j + i * n_dofs_] = Base::dofs_to_cell_[j];
+                    Base::dofs_markers_[j + i * n_dofs_] = Base::dofs_markers_[j];
+                }
+            }
+	    n_dofs_ = n_dofs_ * dof_descriptor::dof_multiplicity;
+        }
+        return;
+    }
+    // getters
+    int n_dofs_per_cell() const { return n_dofs_per_cell_; }
+    int n_dofs_internal_per_cell() const { return n_dofs_internal_per_cell_; }
+    int dof_multiplicity() const { return dof_multiplicity_; }
+   private:
+    int n_dofs_per_node_ = 0, n_dofs_per_cell_ = 0, n_dofs_internal_per_cell_ = 0;
+    int dof_multiplicity_ = 0;
+};
   
 // template argument deduction guide
 template <int LocalDim, int EmbedDim> DofHandler(Triangulation<LocalDim, EmbedDim>) -> DofHandler<LocalDim, EmbedDim>;

@@ -70,6 +70,30 @@ template <int StaticInputSize_, int Order_> class LagrangeBasis {
     std::array<Polynomial<StaticInputSize_, Order_>, n_basis> basis_;
 };
 
+// degenerate case for border integration of basis functions defined on 1D domains
+template <int Order_> struct LagrangeBasis<0, Order_> {
+    static constexpr int n_basis = 1;
+    static constexpr int StaticInputSize = 0;
+    static constexpr int Order = Order_;
+    // for a real set [a, b], \int_{\partial [a,b]} f(x)\psi(x) = \int_a^b f(x)\psi(x) \delta_{a,b}(x) = f(b) - f(a)
+    // elements in this "basis system" behave like Dirac delta functions centered at boundary points. However, since
+    // boundary integration involves only boundary dofs, the same effect can be achieved by consistently returning 1.0
+    using PolynomialType =
+      decltype([]<typename InputType>([[maybe_unused]] const InputType& p) -> double { return 1.0; });
+
+    constexpr LagrangeBasis() = default;
+    template <int n_nodes>
+    constexpr explicit LagrangeBasis([[maybe_unused]] const cexpr::Matrix<double, n_nodes, StaticInputSize>& nodes) {
+        fdapde_static_assert(n_nodes == 0, ORDER_ZERO_LAGRANGE_BASIS_ON_A_ZERO_MEASURE_SET_REQUIRE_NO_NODES);
+    }
+    // getters
+    constexpr PolynomialType operator[](int i) const {
+        fdapde_assert(i < size());
+        return PolynomialType {};
+    }
+    constexpr int size() const { return 1; }
+};
+
 }   // namespace fdapde
 
 #endif   // __LAGRANGE_BASIS_H__

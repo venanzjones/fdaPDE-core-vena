@@ -357,7 +357,9 @@ class FeFunction :
     static constexpr int XprBits = 0;
 
     FeFunction() = default;
-    FeFunction(FeSpace_& fe_space) : fe_space_(&fe_space) { coeff_ = DVector<double>::Zero(fe_space_->n_dofs()); }
+    explicit FeFunction(FeSpace_& fe_space) : fe_space_(&fe_space) {
+        coeff_ = DVector<double>::Zero(fe_space_->n_dofs());
+    }
     FeFunction(FeSpace_& fe_space, const DVector<double>& coeff) : fe_space_(&fe_space), coeff_(coeff) {
         fdapde_assert(coeff.size() > 0 && coeff.size() == fe_space_->n_dofs());
     }
@@ -375,7 +377,7 @@ class FeFunction :
             value = OutputType::Zero();
         }
         for (int i = 0, n = fe_space_->n_shape_functions(); i < n; ++i) {
-            value += coeff_[active_dofs[i]] * fe_space_->eval_shape_function(i, ref_p);
+            value += coeff_[active_dofs[i]] * fe_space_->eval_shape_value(i, ref_p);
         }
         return value;
     }
@@ -389,7 +391,7 @@ class FeFunction :
         DVector<int> active_dofs = cell.dofs();
         Scalar value = 0;
         for (int j = 0, n = fe_space_->n_shape_functions(); j < n; ++j) {
-	  value += coeff_[active_dofs[j]] * fe_space_->eval_shape_function(j, ref_p)[i];
+            value += coeff_[active_dofs[j]] * fe_space_->eval_shape_value(j, ref_p)[i];
         }
         return value;
     }
@@ -450,10 +452,6 @@ class FeFunction :
         fdapde_assert(coeff.size() > 0 && coeff.size() == fe_space_->n_dofs());
         coeff_ = coeff;
         return *this;
-    }
-    // static constructors
-    static constexpr FeFunction<FeSpace_> Zero(FeSpace_& fe_space) {
-        return FeFunction<FeSpace_>(fe_space, DVector<Scalar>::Zero(fe_space.n_dofs()));
     }
    private:
     DVector<double> coeff_;

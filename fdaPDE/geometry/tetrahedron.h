@@ -111,7 +111,7 @@ class Tetrahedron : public Simplex<Triangulation::local_dim, Triangulation::embe
             return *this;
         }
        public:
-        edge_iterator(int index, const Tetrahedron* t) : Base(index, 0, t_->n_edges), t_(t) {
+        edge_iterator(int index, const Tetrahedron* t) : Base(index, 0, t->n_edges), t_(t) {
             if (index_ < t_->n_edges) operator()(index_);
         }
     };
@@ -129,7 +129,7 @@ class Tetrahedron : public Simplex<Triangulation::local_dim, Triangulation::embe
             return *this;
         }
        public:
-        face_iterator(int index, const Tetrahedron* t) : Base(index, 0, t_->n_faces), t_(t) {
+        face_iterator(int index, const Tetrahedron* t) : Base(index, 0, t->n_faces), t_(t) {
             if (index_ < t_->n_faces) operator()(index_);
         }
     };

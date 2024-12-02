@@ -838,7 +838,7 @@ template <typename Scalar_, typename Extents_, typename LayoutPolicy_ = internal
         extents_(), mapping_(), data_() {
         assign_from_block_(other);
     }
-    // assignemnt
+    // assignment
     template <typename OtherMdArray, int... OtherSlicers>
         requires(Order == OtherMdArray::Order - sizeof...(OtherSlicers))
     constexpr MdArray& operator=(const MdArraySlice<OtherMdArray, OtherSlicers...>& other) {
@@ -1006,9 +1006,15 @@ template <typename Scalar_, typename Extents_, typename LayoutPolicy_ = internal
         return MdArraySlice<const MdArray<Scalar, extents_t, layout_t>, Slicers...>(this, slicers...);
     }
     constexpr auto matrix() const {
-        static_assert(Order == 2);
-        if constexpr (Order == 2) { static_assert(static_extents[0] != Dynamic && static_extents[1] != Dynamic); }
-        return cexpr::Map<const Scalar, static_extents[0], static_extents[1], RowMajor>(data());
+        fdapde_static_assert(Order == 2 || Order == 1, THIS_METHOD_IS_ONLY_FOR_ORDER_TWO_OR_ORDER_ONE_MDARRAY);
+        if constexpr (Order == 1) {
+            static_assert(static_extents[0] != Dynamic);
+            return cexpr::Map<const Scalar, static_extents[0], 1, RowMajor>(data());
+        }
+        if constexpr (Order == 2) {
+            static_assert(static_extents[0] != Dynamic && static_extents[1] != Dynamic);
+            return cexpr::Map<const Scalar, static_extents[0], static_extents[1], RowMajor>(data());
+        }
     }
    private:
     template <typename OtherMdArray, int... OtherSlicers>
@@ -1069,7 +1075,7 @@ template <typename Scalar_, typename Extents_, typename LayoutPolicy_ = internal
     mapping_t mapping_ {};
     storage_t data_ {};
 };
-  
+
 }   // namespace fdapde
 
 #endif   // __MDARRAY_H__

@@ -70,7 +70,7 @@ template <> class Triangulation<1, 1> {
     const DVector<double>& nodes() const { return nodes_; }
     const DMatrix<int, Eigen::RowMajor>& cells() const { return cells_; }
     const DMatrix<int, Eigen::RowMajor>& neighbors() const { return neighbors_; }
-    const BinaryVector<fdapde::Dynamic>& boundary() const { return nodes_markers_; }
+    const BinaryVector<Dynamic>& boundary_nodes() const { return nodes_markers_; }
     int n_cells() const { return n_cells_; }
     int n_nodes() const { return n_nodes_; }
     SVector<2> range() const { return range_; }
@@ -93,37 +93,47 @@ template <> class Triangulation<1, 1> {
     cell_iterator cells_begin() const { return cell_iterator(0, this); }
     cell_iterator cells_end() const { return cell_iterator(n_cells_, this); }
 
-    // localize element containing point using a O(log(n)) time-complexity binary search strategy
-    DVector<int> locate(const DVector<double>& points) const {
-        // allocate space
-        DVector<int> result;
-        result.resize(points.rows());
-        // start search
-        for (int i = 0; i < points.rows(); ++i) {
-            // check if point is inside
-            if (points[i] < range_[0] || points[i] > range_[1]) {
-                result[i] = -1;
-            } else {
-                // binary search strategy
-                int h_min = 0, h_max = n_nodes_;
-                while (true) {
-                    int j = h_min + std::floor((h_max - h_min) / 2);
-                    if (points[i] >= nodes_[j] && points[i] < nodes_[j + 1]) {
-                        result[i] = j;
-                        break;
+    template <int Rows, int Cols>
+    std::conditional_t<Rows == Dynamic || Cols == Dynamic, DVector<int>, int>
+    locate(const Eigen::Matrix<double, Rows, Cols>& p) const {
+        fdapde_static_assert(
+          (Cols == 1 && Rows == 1) || (Cols == Dynamic && Rows == Dynamic),
+          YOU_PASSED_A_MATRIX_OF_POINTS_TO_LOCATE_OF_WRONG_DIMENSIONS);
+        if constexpr (Cols == 1) {
+            return locate_(p[0]);
+        } else {
+            fdapde_assert(p.rows() > 0 && p.cols() == 1);
+            DVector<int> result;
+            result.resize(p.rows());
+            // start search
+            for (int i = 0; i < p.rows(); ++i) { result[i] = locate_(p(i, 0)); }
+            return result;
+        }
+    }
+   protected:
+      // localize element containing point using a O(log(n)) time-complexity binary search strategy
+    int locate_(double p) const {
+        // check if point is inside
+        if (p < range_[0] || p > range_[1]) {
+            return -1;
+        } else {
+            // binary search strategy
+            int h_min = 0, h_max = n_nodes_;
+            while (true) {
+                int j = h_min + std::floor((h_max - h_min) / 2);
+                if (p >= nodes_[j] && p < nodes_[j + 1]) {
+                    return j;
+                } else {
+                    if (p < nodes_[j]) {
+                        h_max = j;
                     } else {
-                        if (points[i] < nodes_[j]) {
-                            h_max = j;
-                        } else {
-                            h_min = j;
-                        }
+                        h_min = j;
                     }
                 }
             }
         }
-        return result;
+        return -1;
     }
-   protected:
     DVector<double> nodes_;                            // physical coordinates of mesh's vertices
     DMatrix<int, Eigen::RowMajor> cells_ {};           // nodes (as row indexes in nodes_ matrix) composing each cell
     DMatrix<int, Eigen::RowMajor> neighbors_ {};       // ids of faces adjacent to a given face (-1 if no adjacent face)
