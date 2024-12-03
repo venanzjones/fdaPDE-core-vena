@@ -36,6 +36,7 @@ template <> class Triangulation<1, 1> {
   
     Triangulation() = default;
     Triangulation(const DVector<double>& nodes) : nodes_(nodes) {
+        fdapde_assert(nodes.rows() > 1);
         // store number of nodes and elements
         n_nodes_ = nodes_.rows();
         n_cells_ = n_nodes_ - 1;

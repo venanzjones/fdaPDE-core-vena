@@ -70,6 +70,9 @@ template <int M, int N, typename Derived> class TriangulationBase {
     TriangulationBase(
       const DMatrix<double>& nodes, const DMatrix<int>& cells, const DMatrix<int>& boundary, int flags) :
         nodes_(nodes), cells_(cells), nodes_markers_(boundary), flags_(flags) {
+        fdapde_assert(
+          nodes.rows() > 0 && nodes.cols() == embed_dim && cells.rows() > 0 && cells.cols() == n_nodes_per_cell &&
+          boundary.rows() == nodes.rows() && boundary.cols() == 1);
         // store number of nodes and number of cells
         n_nodes_ = nodes_.rows();
         n_cells_ = cells_.rows();
