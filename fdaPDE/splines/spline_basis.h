@@ -28,20 +28,33 @@ class SplineBasis {
    private:
     int order_;
     std::vector<Spline> basis_ {};
+    std::vector<double> knots_ {};
    public:
     static constexpr int StaticInputSize = 1;
     static constexpr int Order = Dynamic;
     // constructors
     constexpr SplineBasis() : order_(0) { }
+    // constructor from user defined knot vector
     template <typename KnotsVectorType>
         requires(requires(KnotsVectorType knots, int i) {
                     { knots[i] } -> std::convertible_to<double>;
                     { knots.size() } -> std::convertible_to<std::size_t>;
                 })
     SplineBasis(KnotsVectorType&& knots, int order) : order_(order) {
-        // construct knots vector
+        fdapde_assert(std::is_sorted(knots.begin() FDAPDE_COMMA knots.end(), std::less_equal<double>()));
         int n = knots.size();
-	std::vector<double> knots_;
+        knots_.resize(n);
+        for (int i = 0; i < n; ++i) { knots_[i] = knots[i]; }
+        // define basis system
+        basis_.reserve(n - order_ + 1);
+        for (int i = 0; i < n - order_ - 1; ++i) { basis_.emplace_back(knots_, i, order_); }
+    }
+    // constructor from geometric interval (no repeated knots)
+    SplineBasis(const Triangulation<1, 1>& interval, int order) : order_(order) {
+        // construct knots vector
+        Eigen::Matrix<double, Dynamic, 1> knots = interval.nodes();
+        fdapde_assert(std::is_sorted(knots.begin() FDAPDE_COMMA knots.end() FDAPDE_COMMA std::less_equal<double>()));
+        int n = knots.size();
         knots_.resize(n + 2 * order_);
         // pad the knot vector to obtain a full basis for the whole knot span [knots[0], knots[n-1]]
         for (int i = 0; i < n + 2 * order_; ++i) {
@@ -56,13 +69,14 @@ class SplineBasis {
             }
 	}
         // define basis system
-        basis_.reserve(knots_.size() - order_ - 1);
-        for (int k = 0; k < knots_.size() - order_ - 1; ++k) { basis_.emplace_back(knots_, k, order_); }
+        basis_.reserve(knots_.size() - order_ + 1);
+        for (int i = 0; i < knots_.size() - order_ - 1; ++i) { basis_.emplace_back(knots_, i, order_); }
     }
-    SplineBasis(const Triangulation<1, 1>& interval, int order) : SplineBasis(interval.nodes(), order) { }
     // getters
     constexpr const Spline& operator[](int i) const { return basis_[i]; }
     constexpr int size() const { return basis_.size(); }
+    constexpr const std::vector<double>& knots_vector() const { return knots_; }
+    int n_knots() const { return knots_.size(); }
 };
 
 } // namespace fdapde

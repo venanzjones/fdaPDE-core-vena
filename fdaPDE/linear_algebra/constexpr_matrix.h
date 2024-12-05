@@ -713,8 +713,8 @@ template <typename MatrixType> class PartialPivLU {
     // solve linear system Ax = b using A factorization PA = LU
     template <typename RhsType> constexpr Matrix<Scalar, Size, 1> solve(const RhsType& rhs) {
         fdapde_static_assert(
-          rhs.rows() == Size && rhs.cols() == 1 && std::is_same_v<Scalar FDAPDE_COMMA typename RhsType::Scalar>,
-          INVALID_RHS_VECTOR_OR_OPERANDS_HAVE_DIFFERENT_SCALAR_TYPES);
+          std::is_same_v<Scalar FDAPDE_COMMA typename RhsType::Scalar>, INVALID_SCALAR_TYPE_FOR_RHS_OPERAND);
+        fdapde_constexpr_assert(rhs.rows() == Size && rhs.cols() == 1);
         Matrix<Scalar, Size, 1> x;
         // evaluate U^{-1} * (L^{-1} * (P * rhs))
         x = P_ * rhs;

@@ -49,7 +49,7 @@ template <typename Triangulation_, typename FeType_> class FeSpace {
   
     FeSpace() = default;
     FeSpace(const Triangulation_& triangulation, FeType_ fe) :
-        triangulation_(&triangulation), dof_handler_(triangulation) {
+        triangulation_(std::addressof(triangulation)), dof_handler_(triangulation) {
         dof_handler_.enumerate(fe);
         if constexpr (requires(cell_dof_descriptor c) { c.dofs_phys_coords(); }) {
             cell_basis_ = BasisType(unit_cell_dofs_.dofs_phys_coords());
@@ -104,6 +104,14 @@ template <typename Triangulation_, typename FeType_> class FeSpace {
         fdapde_static_assert(n_components > 1, THIS_METHOD_IS_FOR_VECTOR_FINITE_ELEMENTS_ONLY);
         return face_basis_[i].divergence()(p);
     }
+    // evaluation on physical domain
+    // shape function evaluation, skip point location step (cell_id provided as input)
+    template <typename InputType> auto eval_cell_value(int i, int cell_id, const InputType& p) const {
+        // map p to reference cell and evaluate
+        typename DofHandler<local_dim, embed_dim>::CellType cell = dof_handler_.cell(cell_id);
+        InputType ref_p = cell.invJ() * (p - cell.node(0));
+        return eval_shape_value(i, ref_p);
+    }
     // evaluate value of the i-th shape function defined on the physical cell containing point p
     template <typename InputType> auto eval_cell_value(int i, const InputType& p) const {
         // localize p in physical domain
@@ -111,13 +119,9 @@ template <typename Triangulation_, typename FeType_> class FeSpace {
         if (cell_id == -1) return std::numeric_limits<double>::quiet_NaN();
 	return eval_cell_value(i, cell_id, p);
     }
-    // shape function evaluation, skip point location step
-    template <typename InputType> auto eval_cell_value(int i, int cell_id, const InputType& p) const {
-        // map p to reference cell and evaluate
-        typename DofHandler<local_dim, embed_dim>::CellType cell = dof_handler_.cell(cell_id);
-        InputType ref_p = cell.invJ() * (p - cell.node(0));
-        return eval_shape_value(i, ref_p);
-    }
+  
+  // need to return something which represent a basis function on the whole physical domain
+  
     // generate fe_function bounded to this finite element space
     FeFunction<FeSpace<Triangulation_, FeType_>> make_fe_function(const Eigen::Matrix<double, Dynamic, 1>& coeff_vec) {
         return FeFunction<FeSpace<Triangulation_, FeType_>>(*this, coeff_vec);

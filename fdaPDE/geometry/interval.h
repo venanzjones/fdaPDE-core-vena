@@ -24,76 +24,71 @@ namespace fdapde {
   
 // template specialization for 1D meshes (bounded intervals)
 template <int M, int N> class Triangulation;
-template <> class Triangulation<1, 1> {
+template <> class Triangulation<1, 1> : public TriangulationBase<1, 1, Triangulation<1, 1>> {
    public:
-    static constexpr int local_dim = 1;
-    static constexpr int embed_dim = 1;
-    static constexpr int n_nodes_per_cell = 2;
-    static constexpr int n_neighbors_per_cell = 2;
-    static constexpr bool is_manifold = false;
-    using CellType = Segment<Triangulation<1, 1>>;
-    using VertexType = SVector<1>;
-  
+    using Base = TriangulationBase<1, 1, Triangulation<1, 1>>;
+    using Base::cells_;       // N \times 2 matrix of nodes identifiers of each segment
+    using Base::n_cells_;     // N: number of segments
+    using Base::n_nodes_;     // number of nodes (N + 1)
+    using Base::neighbors_;   // N \times 2 matrix of neighboring cells identifiers
+    using Base::nodes_;       // physical coordinates of nodes
+
     Triangulation() = default;
-    Triangulation(const DVector<double>& nodes) : nodes_(nodes) {
-        fdapde_assert(nodes.rows() > 1);
+    Triangulation(const Eigen::Matrix<double, Dynamic, 1>& nodes) : Base() {
+        fdapde_assert(nodes.rows() > 1 && nodes.cols() == 1);
+        nodes_ = nodes;
         // store number of nodes and elements
         n_nodes_ = nodes_.rows();
         n_cells_ = n_nodes_ - 1;
         // compute mesh limits
-        range_[0] = nodes_[0];
-        range_[1] = nodes_[n_nodes_ - 1];
+        Base::range_[0] = nodes[0];
+        Base::range_[1] = nodes[n_nodes_ - 1];
         // build elements and neighboring structure
         cells_.resize(n_cells_, 2);
         for (int i = 0; i < n_nodes_ - 1; ++i) {
             cells_(i, 0) = i;
             cells_(i, 1) = i + 1;
         }
-        neighbors_ = DMatrix<int>::Constant(n_cells_, n_neighbors_per_cell, -1);
+        neighbors_ = Eigen::Matrix<int, Dynamic, Dynamic>::Constant(n_cells_, n_neighbors_per_cell, -1);
         neighbors_(0, 1) = 1;
         for (int i = 1; i < n_cells_ - 1; ++i) {
             neighbors_(i, 0) = i - 1;
             neighbors_(i, 1) = i + 1;
         }
         neighbors_(n_cells_ - 1, 0) = n_cells_ - 2;
-	// set first and last nodes as boundary nodes
-	nodes_markers_.resize(n_nodes_);
-	nodes_markers_.set(0);
-	nodes_markers_.set(n_nodes_ - 1);
+        // set first and last nodes as boundary nodes
+        Base::boundary_markers_.resize(n_nodes_);
+        Base::boundary_markers_.set(0);
+        Base::boundary_markers_.set(n_nodes_ - 1);
     };
     // construct from interval's bounds [a, b] and the number of equidistant nodes n used to split [a, b]
     Triangulation(double a, double b, int n) : Triangulation(DVector<double>::LinSpaced(n, a, b)) { }
 
     // getters
-    CellType cell(int id) const { return CellType(id, this); }
-    VertexType node(int id) const { return SVector<1>(nodes_[id]); }
+    const typename Base::CellType& cell(int id) const {
+        if (Base::flags_ & cache_cells) {   // cell caching enabled
+            return cell_cache_[id];
+        } else {
+            cell_ = typename Base::CellType(id, this);
+            return cell_;
+        }
+    }
     bool is_node_on_boundary(int id) const { return (id == 0 || id == (n_nodes_ - 1)); }
-    const DVector<double>& nodes() const { return nodes_; }
-    const DMatrix<int, Eigen::RowMajor>& cells() const { return cells_; }
-    const DMatrix<int, Eigen::RowMajor>& neighbors() const { return neighbors_; }
-    const BinaryVector<Dynamic>& boundary_nodes() const { return nodes_markers_; }
-    int n_cells() const { return n_cells_; }
-    int n_nodes() const { return n_nodes_; }
-    SVector<2> range() const { return range_; }
-
-    // iterators support
-    class cell_iterator : public internals::index_iterator<cell_iterator, CellType> {
-        using Base = internals::index_iterator<cell_iterator, CellType>;
-        using Base::index_;
-        friend Base;
-        const Triangulation* mesh_;
-        cell_iterator& operator()(int i) {
-            Base::val_ = mesh_->cell(i);
-            return *this;
-        }
-       public:
-        cell_iterator(int index, const Triangulation* mesh) : Base(index, 0, mesh->n_cells_), mesh_(mesh) {
-            if (index_ < mesh_->n_cells_) operator()(index_);
-        }
-    };
-    cell_iterator cells_begin() const { return cell_iterator(0, this); }
-    cell_iterator cells_end() const { return cell_iterator(n_cells_, this); }
-
+    constexpr int n_boundary_nodes() const { return 2; }
+    double measure() const { return std::abs(range_[1] - range_[0]); }
+    // boundary iterator
+    using boundary_iterator = Base::boundary_node_iterator;
+    BoundaryIterator<Triangulation<1, 1>> boundary_begin(int marker = BoundaryAll) const {
+        return BoundaryIterator<Triangulation<1, 1>>(0, this, marker);
+    }
+    BoundaryIterator<Triangulation<1, 1>> boundary_end(int marker = BoundaryAll) const {
+        return BoundaryIterator<Triangulation<1, 1>>(n_boundary_nodes(), this, marker);
+    }
+    std::pair<BoundaryIterator<Triangulation<1, 1>>, BoundaryIterator<Triangulation<1, 1>>>
+    boundary(int marker = BoundaryAll) const {
+        return std::make_pair(boundary_begin(marker), boundary_end(marker));
+    }
+    // point location
     template <int Rows, int Cols>
     std::conditional_t<Rows == Dynamic || Cols == Dynamic, DVector<int>, int>
     locate(const Eigen::Matrix<double, Rows, Cols>& p) const {
@@ -111,8 +106,17 @@ template <> class Triangulation<1, 1> {
             return result;
         }
     }
-   protected:
-      // localize element containing point using a O(log(n)) time-complexity binary search strategy
+    std::vector<int> node_patch(int node_id) const {   // set of cells have node with id node_id as vertex, O(1)
+        return is_node_on_boundary(node_id) ?
+	  std::vector<int>({node_id == 0 ? 0 : (n_cells_ - 1)}) : std::vector<int>({node_id - 1, node_id});
+    }
+
+    std::vector<int> node_one_ring(int node_id) const {   // nodes connected to the node with id node_id, O(1)
+        return is_node_on_boundary(node_id) ?
+	  std::vector<int>({node_id == 0 ? 1 : (n_nodes_ - 2)}) : std::vector<int>({node_id - 1, node_id + 1});
+    }
+   private:
+      // localize element containing point using a O(log(n)) binary search strategy
     int locate_(double p) const {
         // check if point is inside
         if (p < range_[0] || p > range_[1]) {
@@ -122,10 +126,10 @@ template <> class Triangulation<1, 1> {
             int h_min = 0, h_max = n_nodes_;
             while (true) {
                 int j = h_min + std::floor((h_max - h_min) / 2);
-                if (p >= nodes_[j] && p < nodes_[j + 1]) {
+                if (p >= nodes_(j, 0) && p < nodes_(j + 1, 0)) {
                     return j;
                 } else {
-                    if (p < nodes_[j]) {
+                    if (p < nodes_(j, 0)) {
                         h_max = j;
                     } else {
                         h_min = j;
@@ -135,12 +139,9 @@ template <> class Triangulation<1, 1> {
         }
         return -1;
     }
-    DVector<double> nodes_;                            // physical coordinates of mesh's vertices
-    DMatrix<int, Eigen::RowMajor> cells_ {};           // nodes (as row indexes in nodes_ matrix) composing each cell
-    DMatrix<int, Eigen::RowMajor> neighbors_ {};       // ids of faces adjacent to a given face (-1 if no adjacent face)
-    BinaryVector<fdapde::Dynamic> nodes_markers_ {};   // j-th element is 1 \iff node j is on boundary
-    SVector<2> range_ {};                              // mesh bounding box (min and max coordinates)
-    int n_nodes_ = 0, n_cells_ = 0;
+    // cell caching
+    std::vector<typename Base::CellType> cell_cache_;
+    mutable typename Base::CellType cell_;   // used in case cell caching is off
 };
 
 }   // namespace fdapde

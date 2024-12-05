@@ -18,16 +18,17 @@
 #define __TRIANGULATION_H__
 
 #include <array>
+#include <random>
 #include <unordered_map>
 #include <vector>
-#include <random>
 
 #include "../linear_algebra/binary_matrix.h"
 #include "../utils/constexpr.h"
 #include "../utils/symbols.h"
-#include "triangle.h"
+#include "segment.h"
 #include "tetrahedron.h"
 #include "tree_search.h"
+#include "triangle.h"
 #include "utils.h"
 
 namespace fdapde {
@@ -47,13 +48,13 @@ template <typename Triangulation> struct BoundaryIterator : public Triangulation
 template <int M, int N> class Triangulation;
 template <int M, int N, typename Derived> class TriangulationBase {
    public:
-    // can speek only about cells and vertices here and neighbors
     static constexpr int local_dim = M;
     static constexpr int embed_dim = N;
     static constexpr int n_nodes_per_cell = local_dim + 1;
     static constexpr int n_neighbors_per_cell = local_dim + 1;
     static constexpr bool is_manifold = !(local_dim == embed_dim);
-    using CellType = std::conditional_t<M == 2, Triangle<Derived>, Tetrahedron<Derived>>;
+    using CellType = std::conditional_t<
+      local_dim == 1, Segment<Derived>, std::conditional_t<local_dim == 2, Triangle<Derived>, Tetrahedron<Derived>>>;
     using TriangulationType = Derived;
     class NodeType {   // triangulation node abstraction
         int id_;
@@ -62,14 +63,15 @@ template <int M, int N, typename Derived> class TriangulationBase {
         NodeType() = default;
         NodeType(int id, const Derived* mesh) : id_(id), mesh_(mesh) { }
         int id() const { return id_; }
-        SVector<embed_dim> coords() const { return mesh_->node(id_); }
-        std::vector<int> patch() const { return mesh_->node_patch(id_); }
+        Eigen::Matrix<double, embed_dim, 1> coords() const { return mesh_->node(id_); }
+        std::vector<int> patch() const { return mesh_->node_patch(id_); }         // cells having this node as vertex
+        std::vector<int> one_ring() const { return mesh_->node_one_ring(id_); }   // ids ofdirectly connected nodes
     };
 
     TriangulationBase() = default;
     TriangulationBase(
       const DMatrix<double>& nodes, const DMatrix<int>& cells, const DMatrix<int>& boundary, int flags) :
-        nodes_(nodes), cells_(cells), nodes_markers_(boundary), flags_(flags) {
+        nodes_(nodes), cells_(cells), boundary_markers_(boundary), flags_(flags) {
         fdapde_assert(
           nodes.rows() > 0 && nodes.cols() == embed_dim && cells.rows() > 0 && cells.cols() == n_nodes_per_cell &&
           boundary.rows() == nodes.rows() && boundary.cols() == 1);
@@ -85,16 +87,16 @@ template <int M, int N, typename Derived> class TriangulationBase {
     TriangulationBase(const DMatrix<double>& nodes, const DMatrix<int>& cells, const DMatrix<int>& boundary) :
         TriangulationBase(nodes, cells, boundary, /*flags = */ 0) { }
     // getters
-    SVector<embed_dim> node(int id) const { return nodes_.row(id); }
-    bool is_node_on_boundary(int id) const { return nodes_markers_[id]; }
-    const DMatrix<double>& nodes() const { return nodes_; }
-    const DMatrix<int, Eigen::RowMajor>& cells() const { return cells_; }
-    const DMatrix<int, Eigen::RowMajor>& neighbors() const { return neighbors_; }
-    const BinaryVector<Dynamic>& boundary_nodes() const { return nodes_markers_; }
+    Eigen::Matrix<double, embed_dim, 1> node(int id) const { return nodes_.row(id); }
+    bool is_node_on_boundary(int id) const { return boundary_markers_[id]; }
+    const Eigen::Matrix<double, Dynamic, Dynamic>& nodes() const { return nodes_; }
+    const Eigen::Matrix<int, Dynamic, Dynamic, Eigen::RowMajor>& cells() const { return cells_; }
+    const Eigen::Matrix<int, Dynamic, Dynamic, Eigen::RowMajor>& neighbors() const { return neighbors_; }
+    const BinaryVector<Dynamic>& boundary_nodes() const { return boundary_markers_; }
     int n_cells() const { return n_cells_; }
     int n_nodes() const { return n_nodes_; }
-    int n_boundary_nodes() const { return nodes_markers_.count(); }
-    SMatrix<2, N> range() const { return range_; }
+    int n_boundary_nodes() const { return boundary_markers_.count(); }
+    Eigen::Matrix<double, 2, embed_dim> range() const { return range_; }
     double measure() const {
         return std::accumulate(
           cells_begin(), cells_end(), 0.0, [](double v, const auto& e) { return v + e.measure(); });
@@ -177,24 +179,32 @@ template <int M, int N, typename Derived> class TriangulationBase {
         using Base::index_;
         friend Base;
         const Derived* mesh_;
+        int marker_;
         boundary_node_iterator& operator()(int i) {
             Base::val_ = NodeType(i, mesh_);
             return *this;
         }
        public:
         using TriangulationType = Derived;
-        boundary_node_iterator(int index, const Derived* mesh) :
-            Base(index, 0, mesh->n_nodes_, mesh_->nodes_markers_), mesh_(mesh) {
-            for (; index_ < Base::end_ && !mesh_->nodes_markers_[index_]; ++index_);
-            if (index_ != Base::end_) { operator()(index_); }
-        }
+      boundary_node_iterator() = default;
+      boundary_node_iterator(int index, const Derived* mesh, int marker) :
+          Base(
+            index, 0, mesh->n_nodes_,
+            marker == BoundaryAll ? mesh->boundary_markers_ :   // apply no custom filter
+              fdapde::make_binary_vector(mesh->nodes_markers().begin(), mesh->nodes_markers().end(), marker) &
+                mesh->boundary_markers_),
+          mesh_(mesh) {
+          for (; index_ < Base::end_ && !Base::filter_[index_]; ++index_);
+          if (index_ != Base::end_) { operator()(index_); }
+      }
     };
-    boundary_node_iterator boundary_nodes_begin() const {
-        return boundary_node_iterator(0, static_cast<const Derived*>(this));
+    boundary_node_iterator boundary_nodes_begin(int marker = BoundaryAll) const {
+        return boundary_node_iterator(0, static_cast<const Derived*>(this), marker);
     }
-    boundary_node_iterator boundary_nodes_end() const {
-        return boundary_node_iterator(n_nodes_, static_cast<const Derived*>(this));
+    boundary_node_iterator boundary_nodes_end(int marker = BoundaryAll) const {
+        return boundary_node_iterator(n_nodes_, static_cast<const Derived*>(this), marker);
     }
+    const std::vector<int>& nodes_markers() const { return nodes_markers_; }
     // random sample points in triangulation
     DMatrix<double> sample(int n_samples, int seed = fdapde::random_seed) const {
         // set up random number generation
@@ -207,7 +217,7 @@ template <int M, int N, typename Derived> class TriangulationBase {
         std::uniform_real_distribution<double> rand_real(0, 1);
         DMatrix<double> coords(n_samples, embed_dim);
         for (int i = 0; i < n_samples; ++i) {
-            // generate random element
+            // generate random cell
             int cell_id = rand_cell(rng);
             auto e = static_cast<const Derived&>(*this).cell(cell_id);
             // generate random point in cell
@@ -220,15 +230,25 @@ template <int M, int N, typename Derived> class TriangulationBase {
         }
         return coords;
     }
+    // all nodes directly connected to node having id node_id, O(log(n))
+    std::vector<int> node_one_ring(int node_id) const {
+        std::vector<int> patch_ = static_cast<const Derived&>(*this).node_patch(node_id);   // O(log(n)) step
+        std::unordered_set<int> one_ring;
+        for (int cell_id : patch_) {
+            for (int i = 0; i < n_nodes_per_cell; ++i) { one_ring.insert(cells_(cell_id, i)); }
+        }
+        return {one_ring.begin(), one_ring.end()};
+    }
    protected:
-    DMatrix<double> nodes_ {};                         // physical coordinates of mesh's vertices
-    DMatrix<int, Eigen::RowMajor> cells_ {};           // nodes (as row indexes in nodes_ matrix) composing each cell
-    DMatrix<int, Eigen::RowMajor> neighbors_ {};       // ids of cells adjacent to a given cell (-1 if no adjacent cell)
-    BinaryVector<fdapde::Dynamic> nodes_markers_ {};   // j-th element is 1 \iff node j is on boundary
-    SMatrix<2, embed_dim> range_ {};                   // mesh bounding box (column i maps to the i-th dimension)
+    DMatrix<double> nodes_ {};                     // physical coordinates of mesh's vertices
+    DMatrix<int, Eigen::RowMajor> cells_ {};       // nodes (as row indexes in nodes_ matrix) composing each cell
+    DMatrix<int, Eigen::RowMajor> neighbors_ {};   // ids of cells adjacent to a given cell (-1 if no adjacent cell)
+    BinaryVector<fdapde::Dynamic> boundary_markers_ {};   // j-th element is 1 \iff node j is on boundary
+    SMatrix<2, embed_dim> range_ {};                      // mesh bounding box (column i maps to the i-th dimension)
     int n_nodes_ = 0, n_cells_ = 0;
     int flags_ = 0;
-    std::vector<int> cells_markers_;   // marker associated to the i-th cells
+    std::vector<int> cells_markers_;   // marker associated to the i-th cell
+    std::vector<int> nodes_markers_;   // marker associated to the i-th node
 };
 
 // face-based storage
@@ -519,7 +539,7 @@ template <> class Triangulation<3, 3> : public TriangulationBase<3, 3, Triangula
                             face_to_edges_.push_back(edge_id);
                             edge_to_cells_[edge_id].insert(i);   // store (edge, cell) binding
                             edges_map.emplace(edge, edge_id);
-			    boundary_edges.push_back(nodes_markers_[edge[0]] && nodes_markers_[edge[1]]);
+                            boundary_edges.push_back(boundary_markers_[edge[0]] && boundary_markers_[edge[1]]);
                             edge_id++;
                         } else {
                             face_to_edges_.push_back(edges_map.at(edge));
@@ -735,7 +755,7 @@ template <> class Triangulation<3, 3> : public TriangulationBase<3, 3, Triangula
         if (!location_policy_.has_value()) location_policy_ = LocationPolicy(this);
         return location_policy_->locate(p);
     }
-    // computes the set of elements which have node id as vertex
+    // the set of cells which have node id as vertex
     std::vector<int> node_patch(int id) const {
         if (!location_policy_.has_value()) location_policy_ = LocationPolicy(this);
         return location_policy_->all_locate(Base::node(id));

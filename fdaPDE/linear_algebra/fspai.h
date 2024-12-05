@@ -281,8 +281,8 @@ struct FSPAI {
         compute_impl_(matrix, alpha, beta, epsilon);
     }
     // accessors
-    Index rows() const { L_.rows(); }
-    Index cols() const { L_.cols(); }
+    Index rows() const { return L_.rows(); }
+    Index cols() const { return L_.cols(); }
     MatrixL getL() const { return MatrixL(L_); }   // the Cholesky factor of the approximate inverse of matrix
     MatrixU getU() const { return MatrixU(L_.transpose()); }
     SparseMatrixType inverse() const { return getL() * getU(); }   // the factorized sparse approximate inverse

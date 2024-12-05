@@ -134,7 +134,7 @@ class Polynomial : public ScalarBase<StaticInputSize_, Polynomial<StaticInputSiz
     constexpr Polynomial() = default;
     template <typename CoeffVectorType>
     explicit constexpr Polynomial(const CoeffVectorType& coeff_vector) : coeff_vector_(), gradient_() {
-        fdapde_static_assert(int(coeff_vector.size()) == n_monomials, INVALID_COEFFICIENT_VECTOR);
+        fdapde_constexpr_assert(int(coeff_vector.size()) == n_monomials);
         for (int i = 0; i < n_monomials; ++i) { coeff_vector_[i] = coeff_vector[i]; }
         for (int i = 0; i < StaticInputSize; ++i) { gradient_[i] = Derivative(coeff_vector_, i); }
     }

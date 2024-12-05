@@ -70,7 +70,7 @@ class MatrixProduct : public fdapde::MatrixBase<Lhs::StaticInputSize, MatrixProd
     }
     constexpr int rows() const { return lhs_.rows(); }
     constexpr int cols() const { return rhs_.cols(); }
-    constexpr int input_size() const { lhs_.input_size(); }
+    constexpr int input_size() const { return lhs_.input_size(); }
     constexpr int size() const { return rows() * cols(); }
     constexpr const Lhs& lhs() const { return lhs_; }
     constexpr const Rhs& rhs() const { return rhs_; }
