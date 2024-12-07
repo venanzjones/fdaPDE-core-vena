@@ -18,7 +18,12 @@
 #define PRISM_H
 
 // put in config file
-double MAX_HEIGHT = 100000;
+constexpr double MAX_HEIGHT = 100000.0;
+
+// To be decided where should be put
+template <typename T>
+T convex_combination(double lambda, T val1, T val2) {
+    return (1 - lambda) * val1 + lambda * val2;}
 
 namespace fdapde
 {
@@ -28,7 +33,7 @@ namespace core
 struct TriangularPrism
 {
     MeshType mesh; // mesh
-    Eigen::Svector<2> node_1, node_2, node_3; // triangle vertex projected in 2D
+    Eigen::Vector2d node_1, node_2, node_3; // triangle vertex projected in 2D
     int base_id; // id of the triangular base in the mesh
     std::vector<Facet> pi; // vector of facets composing the top and the lateral edges
     std::vector<PrismVertex> prism_nodes; // vector of prism nodes
@@ -52,24 +57,30 @@ struct Facet
     }
     // constructor for non-wall facets
     Facet(const TriangularPrism* prism, double h1, double h2, double h3, int ancestor)
-        : ancestor(ancestor)
+    : ancestor(ancestor), is_wall(false)
     {
-        is_wall = false;
         Eigen::Matrix3d m;
-        m << prism->x1, prism->y1, 1,
-            prism->x2, prism->y2, 1,
-            prism->x3, prism->y3, 1;
-        Eigen::Vector3d rhs;
-        rhs << h1, h2, h3;
-        auto res = m.inverse() * rhs;
-        this->a = res(0);
-        this->b = res(1);
-        this->c = res(2);
+        m << prism->node_1.x(), prism->node_1.y(), 1.0,
+            prism->node_2.x(), prism->node_2.y(), 1.0,
+            prism->node_3.x(), prism->node_3.y(), 1.0;
+
+        Eigen::Vector3d rhs(h1, h2, h3);
+
+        Eigen::FullPivLU<Eigen::Matrix3d> lu(m);
+        if(!lu.isInvertible()) {
+            throw std::runtime_error("cannot compute plane");
+        }
+        Eigen::Vector3d res = lu.solve(rhs);
+
+        a = res(0);
+        b = res(1);
+        c = res(2);
+        wall_id = -1;
     }
     // Aux function 
-    bool is_above(double x, double y, double z) const
+    bool is_above(double x, double y, double z) const noexcept
     {
-        return z > a * x + b * y + c;
+        return (z > (a*x + b*y + c));
     }
 };
 // Auxiliary structure to store prism vertices
@@ -103,7 +114,7 @@ struct CellSection
 
 struct ConvexPolygon
 {
-	std::vector<Eigen::SVector<2>> vertices; // Ordered vertices
+	std::vector<Eigen::Vector2d> vertices; // Ordered vertices
 
 	// Compute the area of the polygon
 	double area() const
@@ -112,8 +123,8 @@ struct ConvexPolygon
 		size_t n = vertices.size();
 		for (size_t i = 0; i < n; ++i)
 		{
-			const Eigen::SVector<2> p1 = vertices[i];
-			const Eigen::SVector<2> p2 = vertices[(i + 1) % n];
+			const Eigen::Vector2d p1 = vertices[i];
+			const Eigen::Vector2d p2 = vertices[(i + 1) % n];
 			a += (p1.x() * p2.y()) - (p2.x() * p1.y());
 		}
 		// Se è negativa dovrei fare reverse dei vertici ma non è strettamente necessario
@@ -124,11 +135,11 @@ struct ConvexPolygon
 TriangularPrism(double x1, double y1,
 			    double x2, double y2,
 			    double x3, double y3) : 
-                mesh(// TODO), base_id(-1)
+                base_id(-1)
 {
-    node_1 = Eigen::Svector<2>(x1, y1);
-    node_2 = Eigen::Svector<2>(x2, y2);
-    node_3 = Eigen::Svector<2>(x3, y3);
+    node_1 = Eigen::Vector2d(x1, y1);
+    node_2 = Eigen::Vector2d(x2, y2);
+    node_3 = Eigen::Vector2d(x3, y3);
     Facet facet;
     // Add the 3 wall facets (id: 0,1,2)
     facet.is_wall = true;
@@ -139,54 +150,69 @@ TriangularPrism(double x1, double y1,
     }
     // Add the base (id: 3)
     pi.push_back(Facet(this, MAX_HEIGHT, MAX_HEIGHT, MAX_HEIGHT, -1));
+
     // Now the tedious part to incorporate the connecitivty
+    // Aux vector to have a clean construction
+    std::vector<std::pair<double, double>> v_coords = {{x1, y1}, {x2, y2}, {x3, y3}};
 
-    // Add the 6 vertices of the prism: 0,1,2 are the top vertices, 3,4,5 are the bottom vertices
+    // Add the prism vertices
+    // Top vertices with coordinates (x_i,y_i, MAX_HEIGHT)
+    // Bottom vertices with coordinates (x_i,y_i, -MAX_HEIGHT)
+    double z = MAX_HEIGHT;
+    for (int h = 0; h < 2; ++h) {  // Loop for top (h=0) and bottom (h=1)
+        int id = (h == 0) ? 3 : -1;  // Top (3) or bottom (-1)
+        for (int i = 0; i < 3; ++i) {
+            prism_nodes.push_back(PrismVertex(
+                (i + 2) % 3,  // First index 
+                i % 3,        // Second index
+                id,                          // id
+                v_coords[i].first,           // x-coordinate
+                v_coords[i].second,          // y-coordinate
+                z                            // z-coordinate
+            ));
+            surviving_nodes.insert(prism_nodes.size() - 1);
+        }
+        z = -z; // For the second iteration, h becomes - MAX_HEIGHT
+    }
 
-    // Top vertices with coordinates (x_i,y_i,MAX_HEIGHT)
-    prism_nodes.push_back(PrismVertex(2, 0, 3, x1, y1, MAX_HEIGHT));
-    surviving_nodes.insert(prism_nodes.size() - 1);
-    prism_nodes.push_back(PrismVertex(0, 1, 3, x2, y2, MAX_HEIGHT));
-    surviving_nodes.insert(prism_nodes.size() - 1);
-    prism_nodes.push_back(PristVertex(1, 2, 3, x3, y3, MAX_HEIGHT));
-    surviving_nodes.insert(prism_nodes.size() - 1);
-
-    // Top vertices with coordinates (x_i,y_i, -MAX_HEIGHT)
-    prism_nodes.push_back(PrismVertex(2, 0, -1, x1, y1, -MAX_HEIGHT));
-    surviving_nodes.insert(prism_nodes.size() - 1);
-    prism_nodes.push_back(PrismVertex(0, 1, -1, x2, y2, -MAX_HEIGHT));
-    surviving_nodes.insert(prism_nodes.size() - 1);
-    prism_nodes.push_back(PrismVertex(1, 2, -1, x3, y3, -MAX_HEIGHT));
-    surviving_nodes.insert(prism_nodes.size() - 1);
-
-    // Now we add the edges: 0-1, 1-2, 2-0, 0-3, 1-4, 2-5 
+    // Now the edges: 0-1, 1-2, 2-0, 0-3, 1-4, 2-5 
     // The induced labeling:  0    1    2    3    4    5
-    prism_edges.push_back(PrismEdge(0, 1, 0, 3));
-    surviving_edges.insert(prism_edges.size() - 1);
-    prism_edges.push_back(PrismEdge(1, 2, 1, 3));
-    surviving_edges.insert(prism_edges.size() - 1);
-    prism_edges.push_back(PrismEdge(2, 0, 2, 3));
-    surviving_edges.insert(prism_edges.size() - 1);
-    prism_edges.push_back(PrismEdge(0, 3, 2, 0));
-    surviving_edges.insert(prism_edges.size() - 1);
-    prism_edges.push_back(PrismEdge(1, 4, 0, 1));
-    surviving_edges.insert(prism_edges.size() - 1);
-    prism_edges.push_back(PrismEdge(2, 5, 1, 2));
-    surviving_edges.insert(prism_edges.size() - 1);
-}
+
+    // Add the base edges    
+    for (int i = 0; i < 3; ++i) {  
+        prism_edges.push_back(PrismEdge(
+            i,                                 
+            (i+1) % 3,                               
+            i,        
+            3        
+        ));
+        surviving_edges.insert(prism_edges.size() - 1);
+    }
+    // Add the vertical edges
+    for (int i = 0; i < 3; ++i) {  // Loop over vertices
+        prism_edges.push_back(PrismEdge(
+            i,                                 
+            i+3,                               
+            (i+2) % 3,        
+            i        
+        ));
+        surviving_edges.insert(prism_edges.size() - 1);
+    }
+
+
 // Triangular prism constructor from 
 TriangularPrism(const MeshType& mesh, int base_id) : base_id(base_id), mesh(mesh)
 {   
     // Build the triangular base in 2D: (0,0) (x2,0) (x3,y3)
     double x1(0), y1(0);
-    node_1 = Eigen::Svector<2>(x1, y1);
+    node_1 = Eigen::Vector2d(x1, y1);
     // Take the base_edge: will connect (0,0) to (x2,0)
     double x2 = mesh.cells(base_id).edges(0).measure();
-    node_2 = Eigen::SVector<2>(x2, 0);
+    node_2 = Eigen::Vector2d(x2, 0);
     // TODO: fix this
     double x3 = mesh.Edge(edge_id).coordOfOppositeVert.x();
     double y3 = mesh.Edge(edge_id).coordOfOppositeVert.y();
-    node_3 = Eigen::Svector<2>(x3, y3);
+    node_3 = Eigen::Vector2d(x3, y3);
 
     Facet facet;
     // Add the 3 wall facets (id: 0,1,2)
@@ -200,36 +226,53 @@ TriangularPrism(const MeshType& mesh, int base_id) : base_id(base_id), mesh(mesh
     // Same as before
     pi.push_back(Facet(this, MAX_HEIGHT, MAX_HEIGHT, MAX_HEIGHT, -1));
 
-    // Add the 6 vertices of the prism: 0,1,2 are the top vertices, 3,4,5 are the bottom vertices
-    // Top vertices with coordinates (x_i,y_i,MAX_HEIGHT)
-    prism_nodes.push_back(PrismVertex(2, 0, 3, x1, y1, MAX_HEIGHT));
-    surviving_nodes.insert(prism_nodes.size() - 1);
-    prism_nodes.push_back(PrismVertex(0, 1, 3, x2, y2, MAX_HEIGHT));
-    surviving_nodes.insert(prism_nodes.size() - 1);
-    prism_nodes.push_back(PristVertex(1, 2, 3, x3, y3, MAX_HEIGHT));
-    surviving_nodes.insert(prism_nodes.size() - 1);
-    // Top vertices with coordinates (x_i,y_i, -MAX_HEIGHT)
-    prism_nodes.push_back(PrismVertex(2, 0, -1, x1, y1, -MAX_HEIGHT));
-    surviving_nodes.insert(prism_nodes.size() - 1);
-    prism_nodes.push_back(PrismVertex(0, 1, -1, x2, y2, -MAX_HEIGHT));
-    surviving_nodes.insert(prism_nodes.size() - 1);
-    prism_nodes.push_back(PrismVertex(1, 2, -1, x3, y3, -MAX_HEIGHT));
-    surviving_nodes.insert(prism_nodes.size() - 1);
+    // Now the tedious part to incorporate the connecitivty
+    // Aux vector to have a clean construction
+    std::vector<std::pair<double, double>> v_coords = {{x1, y1}, {x2, y2}, {x3, y3}};
 
-    // Now we add the edges: 0-1, 1-2, 2-0, 0-3, 1-4, 2-5 
+    // Add the prism vertices
+    // Top vertices with coordinates (x_i,y_i, MAX_HEIGHT)
+    // Bottom vertices with coordinates (x_i,y_i, -MAX_HEIGHT)
+    double z = MAX_HEIGHT;
+    for (int h = 0; h < 2; ++h) {  // Loop for top (h=0) and bottom (h=1)
+        int id = (h == 0) ? 3 : -1;  // Top (3) or bottom (-1)
+        for (int i = 0; i < 3; ++i) {
+            prism_nodes.push_back(PrismVertex(
+                (i + 2) % 3,  // First index 
+                i % 3,        // Second index
+                id,                          // id
+                v_coords[i].first,           // x-coordinate
+                v_coords[i].second,          // y-coordinate
+                z                            // z-coordinate
+            ));
+            surviving_nodes.insert(prism_nodes.size() - 1);
+        }
+        z = -z; // for the second iteration, h becomes - MAX_HEIGHT
+    }
+
+    // Now the edges: 0-1, 1-2, 2-0, 0-3, 1-4, 2-5 
     // The induced labeling:  0    1    2    3    4    5
-    prism_edges.push_back(PrismEdge(0, 1, 0, 3));
-    surviving_edges.insert(prism_edges.size() - 1);
-    prism_edges.push_back(PrismEdge(1, 2, 1, 3));
-    surviving_edges.insert(prism_edges.size() - 1);
-    prism_edges.push_back(PrismEdge(2, 0, 2, 3));
-    surviving_edges.insert(prism_edges.size() - 1);
-    prism_edges.push_back(PrismEdge(0, 3, 2, 0));
-    surviving_edges.insert(prism_edges.size() - 1);
-    prism_edges.push_back(PrismEdge(1, 4, 0, 1));
-    surviving_edges.insert(prism_edges.size() - 1);
-    prism_edges.push_back(PrismEdge(2, 5, 1, 2));
-    surviving_edges.insert(prism_edges.size() - 1);
+
+    // Add the base edges    for (int i = 0; i < 3; ++i) {  
+        prism_edges.push_back(PrismEdge(
+            i,                                 
+            (i+1) % 3,                               
+            i,        
+            3        
+        ));
+        surviving_edges.insert(prism_edges.size() - 1);
+    }
+    // Add the vertical edges
+    for (int i = 0; i < 3; ++i) {  // Loop over vertices
+        prism_edges.push_back(PrismEdge(
+            i,                                 
+            i+3,                               
+            (i+2) % 3,        
+            i        
+        ));
+        surviving_edges.insert(prism_edges.size() - 1);
+    }
+}
 };
 
 // Now that everything is set up, we provide an
@@ -239,18 +282,18 @@ TriangularPrism(const MeshType& mesh, int base_id) : base_id(base_id), mesh(mesh
 void incremental_cutting(const Facet& new_facet)
 {
     // Init a set to store the vertex to remove, for fast insertion/deletion
-    std::set<int> vertex_to_remove;
+    std::set<int> v_to_remove;
     // Loop over all the surviving nodes
     for (auto v : surviving_nodes)
     {
-        auto v_id = prism_nodes[v];
+        int v_id = prism_nodes[v];
         // Check if: h > a * x + b * y + c
         if (new_facet.is_above(v_id->x, v_id->y, v_id->h))
-            vertex_to_remove.insert(v);
+            v_to_remove.insert(v);
     }
-    if (vertex_to_remove.empty())
+    if (v_to_remove.empty())
         return;
-    for (auto v : vertex_to_remove)
+    for (auto v : v_to_remove)
         surviving_nodes.erase(v);
 
     // Append the new facet
@@ -258,7 +301,7 @@ void incremental_cutting(const Facet& new_facet)
     int new_facet_id = pi.size() - 1;
 
     // map to store the intersections of the new facet with the existing facets
-    std::map<int, std::setset<int>> facet_intersections; 
+    std::map<int, std::set<int>> facet_intersections; 
     // edges to be removed
     std::set<int> edges_to_remove;
     // loop over the surviving edges
@@ -275,32 +318,28 @@ void incremental_cutting(const Facet& new_facet)
         if (v1_survives && !v2_survives)
         {
             PrismVertex vertex_new;
+            PrismVertex v1 = prism_nodes[prism_edges[edge_id].vertex1];
+            PrismVertex v2 = prism_nodes[prism_edges[edge_id].vertex2];
+            
             vertex_new.facet1 = prism_edges[edge_id].facet1;
             vertex_new.facet2 = prism_edges[edge_id].facet2;
             vertex_new.facet3 = new_facet_id;
 
-            double delta1 = new_facet.a * prism_nodes[prism_edges[edge_id].vertex1].x
-                + new_facet.b * prism_nodes[prism_edges[edge_id].vertex1].y
-                + new_facet.c - prism_nodes[prism_edges[edge_id].vertex1].h;
+            double delta1 = new_facet.a *v1.x
+                + new_facet.b *v1.y
+                + new_facet.c -v1.h;
 
-            double delta2 = new_facet.a * prism_nodes[prism_edges[edge_id].vertex2].x
-                + new_facet.b * prism_nodes[prism_edges[edge_id].vertex2].y
-                + new_facet.c - prism_nodes[prism_edges[edge_id].vertex2].h;
+            double delta2 = new_facet.a * v2.x
+                + new_facet.b * v2.y
+                + new_facet.c - v2.h;
 
-            double lambda = (delta1 - 0) / (delta1 - delta2);
-            vertex_new.x = (1 - lambda) * prism_nodes[prism_edges[edge_id].vertex1].x
-                + lambda * prism_nodes[prism_edges[edge_id].vertex2].x;
-            vertex_new.y = (1 - lambda) * prism_nodes[prism_edges[edge_id].vertex1].y
-                + lambda * prism_nodes[prism_edges[edge_id].vertex2].y;
-            vertex_new.h = (1 - lambda) * prism_nodes[prism_edges[edge_id].vertex1].h
-                + lambda * prism_nodes[prism_edges[edge_id].vertex2].h;
+            double lambda = (delta1) / (delta1 - delta2);
+            vertex_new.x = convex_combination(lambda, v1.x, v2.x);
+            vertex_new.y = convex_combination(lambda, v1.y, v2.y);
+            vertex_new.z = convex_combination(lambda, v1.z, v2.z);
             prism_nodes.push_back(vertex_new);
-	    /*
-            if (isnan(vertex_new.x) || isnan(vertex_new.y) || isnan(vertex_new.h)) {
-                cout << "Algorithm failed" << endl;
-            }
-	    */
             int new_vertex_id = prism_nodes.size() - 1;
+            
             surviving_nodes.insert(new_vertex_id);
             prism_edges[edge_id].vertex2 = new_vertex_id;
             facet_intersections[prism_edges[edge_id].facet1].insert(new_vertex_id);
@@ -310,38 +349,32 @@ void incremental_cutting(const Facet& new_facet)
         else if (!v1_survives && v2_survives)
         {
             PrismVertex vertex_new;
+            PrismVertex v1 = prism_nodes[prism_edges[edge_id].vertex1];
+            PrismVertex v2 = prism_nodes[prism_edges[edge_id].vertex2];
+
             vertex_new.facet1 = prism_edges[edge_id].facet1;
             vertex_new.facet2 = prism_edges[edge_id].facet2;
             vertex_new.facet3 = new_facet_id;
-            double delta1 = new_facet.a * prism_nodes[prism_edges[edge_id].vertex1].x
-                + new_facet.b * prism_nodes[prism_edges[edge_id].vertex1].y
-                + new_facet.c - prism_nodes[prism_edges[edge_id].vertex1].h;
-            double delta2 = new_facet.a * prism_nodes[prism_edges[edge_id].vertex2].x
-                + new_facet.b * prism_nodes[prism_edges[edge_id].vertex2].y
-                + new_facet.c - prism_nodes[prism_edges[edge_id].vertex2].h;
+            double delta1 = new_facet.a *v1.x
+                + new_facet.b *v1.y
+                + new_facet.c -v1.h;
+            double delta2 = new_facet.a * v2.x
+                + new_facet.b * v2.y
+                + new_facet.c - v2.h;
 
-            double lambda = (delta1 - 0) / (delta1 - delta2);
-            vertex_new.x = (1 - lambda) * prism_nodes[prism_edges[edge_id].vertex1].x
-                + lambda * prism_nodes[prism_edges[edge_id].vertex2].x;
-            vertex_new.y = (1 - lambda) * prism_nodes[prism_edges[edge_id].vertex1].y
-                + lambda * prism_nodes[prism_edges[edge_id].vertex2].y;
-            vertex_new.h = (1 - lambda) * prism_nodes[prism_edges[edge_id].vertex1].h
-                + lambda * prism_nodes[prism_edges[edge_id].vertex2].h;
-
-
-            if (isnan(vertex_new.x) || isnan(vertex_new.y) || isnan(vertex_new.h)) {
-                cout << "incremental_cutting produces nan" << endl;
-                exit(-1);
-            }
-
+            double lambda = (delta1) / (delta1 - delta2);
+            vertex_new.x = convex_combination(lambda, v1.x, v2.x);
+            vertex_new.y = convex_combination(lambda, v1.y, v2.y);
+            vertex_new.z = convex_combination(lambda, v1.z, v2.z);
             prism_nodes.push_back(vertex_new);
+            
             int new_vertex_id = prism_nodes.size() - 1;
             surviving_nodes.insert(new_vertex_id);
             prism_edges[edge_id].vertex1 = new_vertex_id;
             facet_intersections[prism_edges[edge_id].facet1].insert(new_vertex_id);
             facet_intersections[prism_edges[edge_id].facet2].insert(new_vertex_id);
         }
-        // if none of the survives, remove the edge
+        // If none of the survives, remove the edge
         else
         {
             edges_to_remove.insert(edge_id);
@@ -376,10 +409,9 @@ void incremental_cutting(const Facet& new_facet)
         prism_edges.push_back(new_edge);
         surviving_edges.insert(prism_edges.size() - 1);
     }
-};
-}; 
-} // namespace core
-} // namespace fdapde
+}
+}   // namespace core
+}   // namespace fdapde
 
 
 #endif // PRISM_H
