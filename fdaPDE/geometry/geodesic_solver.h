@@ -102,7 +102,6 @@ struct window_t
     double distance_to_root;
     double proportions[2];
     double parent_entry_proportion;
-    // TODO: capire perchè 2d e non 3d
     Eigen::Vector2d ps_coordinates;
 };
 
@@ -119,7 +118,7 @@ struct priority_window_t
 class MyModel
 {
 protected:
-    std::vector<double> scalar_field;
+    std::vector<double> scalar_field_;
     const MeshType& mesh_;
     std::map<int, double> sources_;
     std::set<int> destinations_;
@@ -127,13 +126,13 @@ protected:
 	std::priority_queue<priority_node_t> P_; // pseudosources queue
     std::vector<edge_t> edge_aux_;
     std::vector<node_t> node_aux_;
-    std::map<int,std::unordered_map<int>> nodes_adjacency; // da implementare
+    // optimize complexity of adjacencies later
+    std::vector<std::vector<int>> nodes_adjacencies_; 
 
 protected:
     void init();
     void dispose();
     void propagate();
-    void push_into_pseudosources_queue(const priority_node_t& psuedo_source_quote);
     void add_to_windows_queue(priority_window_t& w_quote);
     bool is_too_small(const window_t& w) const;
     void compute_children_of_pseudosource(int parent_node_id);
@@ -156,7 +155,7 @@ protected:
 
 public:
     // Constructors
-    // Will choose only one in the end
+    // 1) sources distances are automatically set to 0 in the constructors
     BaseModel(const MeshType& mesh, int source) : mesh_(mesh){sources_[source] = 0;}
     BaseModel(const MeshType& mesh, const std::map<int, double>& sources) : mesh_(mesh), sources_(sources){}
     BaseModel(const MeshType& mesh, const std::map<int, double>& sources, const std::set<int> &destinations) : mesh_(mesh), sources_(sources), destinations_(destinations){}
@@ -177,6 +176,48 @@ public:
     const std::vector<double>& get_distance_field() const;
 };
 
+/*
+Algorithm pseudocode (from paper "Improving Chen and Han's algorithm on the discrete geodesic problem")
+and its match in the class, to look for a specific step (i.e. 4), just ctrl+F 4)
+            
+                IMPROVED CHEN-HAN ALGORITHM:
+
+1) Assign the source s with distance 0, create a pseudo-source window w for s, 
+and put w into the queue Q;
+2) While Q is not empty:
+3) Take out the head window w from Q;
+4) If w is a pseudo-source window, say, w = (d, v)
+5) If d is less than the current distance estimate at vertex v
+    Update the distance at v;
+6) If v is a saddle vertex
+    Delete the old pseudo-source window at v and its subtrees;
+7) For each edge opposite to v, add a child window
+(d, v, e, [0, 1]) onto the tail of Q;
+8) Update the distance of each vertex v incident to v with
+w and add a pseudo-source window (d + vv
+, v
+) to
+Q if d + vv
+ is less than the current distance at v
+;
+9) Else is an interval window, say, w := (d, I, e, [a, b]).
+10) If w has only one child on the left (right) edge, or w fails
+to occupy the opposite angle over the existing window w
+according to Lemma 2.2, then
+Compute the only child and push it into Q;
+Else w occupies the opposite angle over w
+
+Delete the abolished subtree of w
+;
+Compute the two children of w and push them into Q;
+Check if w can provide a shorter distance to the vertex v
+opposite to edge e; if true, update the distance estimate at
+v; and if v is a saddle vertex or a boundary vertex, we need
+also generate a pseudo-source window at v and insert it
+into the priority queue Q.
+*/
+
+// Method to be called to run the algorithm
 void ICH::run()
 {
 	init();
@@ -184,12 +225,21 @@ void ICH::run()
 	dispose();
 }
 
-void MyModel::init()
+// Initialize the variables needed for the algorithm
+void MyModel::init() // O(n log n) for the adjacencies
 {
+        // Init the scalar_field distances to infinity  
     	scalar_field.resize(mesh.n_nodes(), DBL_MAX);
     	node_aux_.resize(mesh.n_nodes());
+        nodes_adjacency_.resize(mesh.n_nodes());
+        // Initialize the adjacencies 
+        for(size_t i = 0; i<mesh.n_nodes(); ++i ){
+            nodes_adjacencies_[i] = mesh_.node_one_ring(i);
+        }
+            
 }
 
+// Deletes what is not neeeded after the algorithm ran
 void ICH::dispose()
 {
     while (!Q_.empty())
@@ -200,14 +250,17 @@ void ICH::dispose()
     P_ = priority_queue<priority_node_t>();
 }
 
+// Main method
 void MyModel::propagate()
 {
     std::set<int> temp_destinations(destinations_);
+    // 1) create a pseudo-source window w for s
     compute_sources_children();
     bool from_pseudosources_queue = update_tree_depth_with_choice();
-    
+    // 2) 
     while (!P_.empty() || !Q_.empty())
     {
+        // 3)
         if (from_pseudosources_queue)
         {
             int node_id = P_.top().node_id;
@@ -237,16 +290,14 @@ void ICH::compute_sources_children()
     }
 }
 
-// TODO
-void MyModel::compute_source_children(int src_node_id, double dis)
+void ICH::compute_source_children(int src_node_id, double dis)
     {
 		++node_aux_[src_node_id].birth_time;
 		node_aux_[src_node_id].seq_tree_level = 0;
 		node_aux_[src_node_id].ancestor_id = src_node_id;
 		node_aux_[src_node_id].updated_distance = dis;
 
-        // TODO: questo forse lo avevo già fatto in VTP, checkare
-		int degree = (int)mesh_.Neigh(src_node_id).size();
+		int degree = mesh_.nodes_adjacencies_(src_node_id).size();
 		for (int i = 0; i < degree; ++i)
 		{
 			fill_node_child_of_pseudosource(src_node_id, i);
@@ -261,12 +312,14 @@ void MyModel::compute_source_children(int src_node_id, double dis)
 // TODO:
 void MyModel::fill_node_child_of_pseudosource(int source, int subnode_id)
 	{
-        const EdgeType& edge = mesh_.edges().row(mesh_.Neigh(source)[subnode_id].first);
-        // TODO: right vert cos'è?
+        // TODO: qua edge id è il lato che connette source a subnode_id
+        int edge_id = mesh_.nodes_adjacencies_(source)[subnode_id];
+        const EdgeType& edge = mesh_.edges().row(edge_id);
+        // TODO: right vert non è uno tra source e subnode_id?
 		int index = edge.right_node_id;
 
 		double dis = node_aux_[source].updated_distance + edge.measure();
-        // TODO: EPSILON definition e edge.length?
+
 		if (dis >= node_aux_[index].updated_distance - EPSILON)
 			return;
 		node_aux_[index].parent_is_a_pseudosource = true;
@@ -277,14 +330,13 @@ void MyModel::fill_node_child_of_pseudosource(int source, int subnode_id)
 		node_aux_[index].ancestor_id = node_aux_[source].ancestor_id;
 		node_aux_[index].updated_distance = dis;
 		if (!mesh_.is_node_strongly_convex(index))
-			push_into_pseudosources_queue(priority_node_t(node_aux_[index].birth_time,
+			P_.push(priority_node_t(node_aux_[index].birth_time,
 				index, dis));
 	}
-// TODO: 
+
 void MyModel::create_interval_child_of_pseudosource(int source, int incident_edge_subindex, double prop_left= 0, double prop_right = 1)
 {
-    // TODO: 
-    int incident_edge_id = mesh_.Neigh(source)[incident_edge_subindex].first;
+    int incident_edge_id = mesh_.nodes_adjacencies_(source)[incident_edge_subindex];
     if (mesh_.is_edge_on_boundary(incident_edge_id))
         return;
     const EdgeType& edge = mesh_.edges().row(incident_edge_id);
@@ -595,7 +647,7 @@ bool MyModel::update_tree_depth_with_choice()
     {
         if (!P_.empty())
         {
-            const node_t& infoOfHeadElemOfPseudoSources = node_aux_[P_.front().node_id];
+            // const node_t& infoOfHeadElemOfPseudoSources = node_aux_[P_.front().node_id];
             from_pseudosources_queue = true;
         }
     }
@@ -603,7 +655,7 @@ bool MyModel::update_tree_depth_with_choice()
     {
         if (P_.empty())
         {
-            const window_t& infoOfHeadElemOfWindows = *Q_.front().w_pointer;
+            // const window_t& infoOfHeadElemOfWindows = *Q_.front().w_pointer;
             from_pseudosources_queue = false;
         }
         else
@@ -628,11 +680,12 @@ bool MyModel::check_window(window_t& w) const
 {
     if (w.direct_parent_is_pseudo_source)
         return true;
+    const double mesh_range = (mesh_.range.row(1)-mesh_.range.row(1)).squadredNorm;
     const EdgeType& edge = mesh_.edges().row(w.current_edge_id); 
     int leftVert = edge.indexOfLeftVert;
     double dx = w.ps_coordinates(0) - w.proportions[1] * edge.measure();
     double rightLen = sqrt(dx * dx + w.ps_coordinates(1) * w.ps_coordinates(1));
-    if (node_aux_[leftVert].updated_distance < 10000 * mesh_.GetScale() && node_aux_[leftVert].updated_distance + w.proportions[1] * edge.measure()
+    if (node_aux_[leftVert].updated_distance < 10000 * mesh_range && node_aux_[leftVert].updated_distance + w.proportions[1] * edge.measure()
         < w.distance_to_root + rightLen)
     {
         return false;
@@ -642,7 +695,7 @@ bool MyModel::check_window(window_t& w) const
     // go on
    dx = w.ps_coordinates(0) - w.proportions[0] * edge.measure();
     double leftLen = sqrt(dx * dx + w.ps_coordinates(1) * w.ps_coordinates(1));
-    if (node_aux_[rightVert].updated_distance < 10000 * mesh_.GetScale() && node_aux_[rightVert].updated_distance + (1 - w.proportions[0]) * edge.measure()
+    if (node_aux_[rightVert].updated_distance < 10000 * mesh_range && node_aux_[rightVert].updated_distance + (1 - w.proportions[0]) * edge.measure()
         < w.distance_to_root + leftLen)
     {
         return false;
@@ -650,7 +703,7 @@ bool MyModel::check_window(window_t& w) const
     const CRichModel::CEdge& oppositeEdge = mesh_.Edge(edge.reverse_edge_id);
     double xOfVert = edge.measure() - oppositeEdge.coordOfOppositeVert(0);
     double yOfVert = -oppositeEdge.coordOfOppositeVert(1);
-    if (node_aux_[oppositeEdge.indexOfOppositeVert].updated_distance < 10000 * mesh_.GetScale())
+    if (node_aux_[oppositeEdge.indexOfOppositeVert].updated_distance < 10000 * mesh_range)
     {
         if (w.direct_parent_edge_on_left)
         {
@@ -956,11 +1009,8 @@ void MyModel::compute_children_of_pseudosource_from_window(int parent_node_id)
 		}
 	}
 
-void ICH::push_into_pseudosources_queue(const priority_node_t& psuedo_source_quote)
-{
-    P_.push(psuedo_source_quote);
-}
-
+// Method to add a valid window to windows queue
+// The distance is updated via min_distance_of_windows()
 void ICH::add_to_windows_queue(priority_window_t& w_quote)
 {
     if (!check_window(*w_quote.w_pointer))
@@ -971,6 +1021,10 @@ void ICH::add_to_windows_queue(priority_window_t& w_quote)
     w_quote.updated_distance = min_distance_of_windows(*w_quote.w_pointer);
     Q_.push(w_quote);
 }
+
+
+// BACKTRACE ATM NOT NEEDED
+
 
 std::vector<EdgePoint> MyModel::BacktraceShortestPath(int end) const
 {

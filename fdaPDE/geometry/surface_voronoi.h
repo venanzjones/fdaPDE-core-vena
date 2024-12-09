@@ -51,7 +51,7 @@ class SurfaceVoronoi {
     private:
         MeshType mesh_;
         VoronoiPartitionType voronoi_partition_;
-        void assembly_VD_in_triangle(VoronoiPartitionType & domain_vd_partition);
+        void assembly_VD_in_triangle(VoronoiPartitionType& domain_vd_partition);
         DistanfceFieldType compute_overpropagation_field(const std::set<int>& sources)
 
 }
@@ -198,17 +198,16 @@ DistanfceFieldType SurfaceVoronoi::compute_overpropagation_field(const std::set<
             }
         }
         // Now I am ready to run the algorithm
-        DistanceSolver alg_single_src(model, single_src, destinations);
+        DistanceSolver alg_single_src(this->mesh_, single_src, destinations);
         alg_single_src.execute();
 
         // Store the distances in the distance field
         for (auto face_id : alg.candidates[src])
         {
-            // TODO: check 
             distance_field[face_id].push_back(make_tuple(src,
-                alg_single_src.get_distance_field()[model.Face(face_id)[0]],
-                alg_single_src.get_distance_field()[model.Face(face_id)[1]],
-                alg_single_src.get_distance_field()[model.Face(face_id)[2]]));
+                alg_single_src.get_distance_field()[this->mesh_.cells().row(face_id)[0]],
+                alg_single_src.get_distance_field()[this->mesh_.cells().row(face_id)[1]],
+                alg_single_src.get_distance_field()[this->mesh_.cells().row(face_id)[2]]));
         }
     }
     return distance_field;
