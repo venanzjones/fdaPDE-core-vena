@@ -15,8 +15,8 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 
-#ifndef __DISTANCE_SOVLER_H__
-#define __DISTANCE_SOVLER_H__
+#ifndef __GEODESIC_SOVLER_H__
+#define __GEODESIC_SOVLER_H__
 
 #include <queue>
 #include <set>
@@ -35,9 +35,7 @@ double PI_EXACT = std::numbers::pi;
 namespace fdapde {
 namespace core {
 
-// Auxiliary structures
-
-struct node_t
+    struct node_t
 {
     bool parent_is_a_pseudosource;
     char birth_time;
@@ -98,10 +96,10 @@ struct window_t
     int brach_parent_id;
     int root_node_id;
     int current_edge_id;
-    long seq_tree_level;//may removed
+    long seq_tree_level; //may removed
     int ancestor_id;
     double distance_to_root;
-    double proportions[2];
+    double proportions[2]; // [a,b]
     double parent_entry_proportion;
     Eigen::Vector2d ps_coordinates;
 };
@@ -116,19 +114,18 @@ struct priority_window_t
     }
 };
 
-class ICH
+class GeodesicSolver
 {
 protected:
-    std::vector<double> scalar_field_;
-    const MeshType& mesh_;
-    std::map<int, double> sources_;
-    std::set<int> destinations_;
+    std::vector<double> scalar_field_; // scalar field
+    const MeshType& mesh_; // mesh object
+    std::map<int, double> sources_; // sources, distances
+    std::set<int> destinations_; // set of destinations
     std::priority_queue<priority_window_t> Q_; // window queue
 	std::priority_queue<priority_node_t> P_; // pseudosources queue
-    std::vector<edge_t> edge_aux_;
-    std::vector<node_t> node_aux_;
-    // optimize complexity of adjacencies later
-    std::vector<std::vector<int>> nodes_adjacencies_; 
+    std::vector<edge_t> edge_aux_; // auxiliary structure for the egdes
+    std::vector<node_t> node_aux_; // auxiliary structure for the nodes
+    std::unordered_map<int,std::vector<int>> nodes_adjacencies_; // adjacencies, contains vector of one-ring
 
 protected:  
     void init(); // commented
@@ -136,11 +133,11 @@ protected:
     void propagate(); 
     void add_to_windows_queue(priority_window_t& w_quote); // commented
     bool is_too_small(const window_t& w) const; // commented
-    void propagate_ps(int parent_node_id); // commented
-    void propagate_ps_from_ps(int parent_node_id); // commented
-    void propagate_ps_from_window(int parent_node_id); // commented
-    void create_interval_child_of_pseudosource(int source, int incident_edge_subindex, double prop_left = 0, double prop_right = 1);
-    void extend_pseudosource(int source, int subnode_id);
+    void compute_children_of_pseudosource(int parent_node_id); // commented
+    void compute_children_of_pseudosource_from_pseudosource(int parent_node_id); // commented
+    void compute_children_of_pseudosource_from_window(int parent_node_id); // commented
+    void create_interval_child_of_pseudosource(int src, int incident_edge_subindex, double prop_left = 0, double prop_right = 1);
+    void extend_pseudosource(int src, int neigh_id);
     void compute_sources_children();
     void compute_source_children(int src_node_id, double dis);
     void compute_left_child(const window_t& w);
@@ -157,73 +154,26 @@ protected:
 public:
     // Constructors
     // init) sources distances are automatically set to 0 in the constructors
-    BaseModel(const MeshType& mesh, int source) : mesh_(mesh){sources_[source] = 0;}
-    BaseModel(const MeshType& mesh, const std::map<int, double>& sources) : mesh_(mesh), sources_(sources){}
-    BaseModel(const MeshType& mesh, const std::map<int, double>& sources, const std::set<int> &destinations) : mesh_(mesh), sources_(sources), destinations_(destinations){}
-    BaseModel(const MeshType& mesh, const std::set<int>& sources) : mesh_(mesh)
+    GeodesicSolver(const MeshType& mesh, int src) : mesh_(mesh){sources_[src] = 0;}
+    GeodesicSolver(const MeshType& mesh, const std::map<int, double>& sources) : mesh_(mesh), sources_(sources){}
+    GeodesicSolver(const MeshType& mesh, const std::map<int, double>& sources, const std::set<int> &destinations) : mesh_(mesh), sources_(sources), destinations_(destinations){}
+    GeodesicSolver(const MeshType& mesh, const std::set<int>& sources) : mesh_(mesh)
     {
 	for (auto it = sources.begin(); it != sources.end(); ++it)
 		sources_[*it] = 0;
     }
-    BaseModel(const MeshType& mesh, const std::set<int>& sources, const std::set<int>& destinations) : mesh_(mesh), destinations_(destinations)
+    GeodesicSolver(const MeshType& mesh, const std::set<int>& sources, const std::set<int>& destinations) : mesh_(mesh), destinations_(destinations)
     {
 	for (auto it = sources.begin(); it != sources.end(); ++it)
 		sources_[*it] = 0;
     }
     // Public methods
     void run();
-    std::vector<EdgePoint> backtrace_shortest_path(int end) const;
-    int get_ancestor(int node_id) const; // TODO: serve veramente?
     const std::vector<double>& get_distance_field() const;
 };
 
-/*
-Algorithm pseudocode (from paper "Improving Chen and Han's algorithm on the discrete geodesic problem")
-and its match in the class, to look for a specific step (i.e. 4), just ctrl+F 4)
-            
-                IMPROVED CHEN-HAN ALGORITHM:
-
-init)
-
-1) While Q is not empty:
-2)     Take out the head window w from Q;
-3)     If w is a pseudo-source window, say, w = (d, v):
-4)         If d is less than the current distance estimate at vertex v:
-5)             Update the distance at v;
-6)             If v is a saddle vertex:
-7)                 Delete the old pseudo-source window at v and its subtrees;
-8)                 For each edge opposite to v:
-9)                     Add a child window (d, v, e, [0, 1]) onto the tail of Q;
-10)            Update the distance of each vertex v' incident to v with w:
-11)                If d + d(v, v') is less than the current distance at v':
-12)                    Add a pseudo-source window (d + d(v, v'), v') to Q;
-13)    Else:  (w is an interval window, say, w := (d, I, e, [a, b]) )
-14)        If w has only one child on the left (right) edge, or w fails to occupy the opposite angle 
-            over the existing window w' according to Lemma 2.2:
-15)            Compute the only child and push it into Q;
-16)        Else:  (w occupies the opposite angle over w')
-17)            Delete the abolished subtree of w';
-18)            Compute the two children of w and push them into Q;
-19)        Check if w can provide a shorter distance to the vertex v opposite to edge e:
-20)            If true:
-21)                Update the distance estimate at v;
-22)                If v is a saddle vertex or a boundary vertex:
-23)                    Generate a pseudo-source window at v;
-24)                    Insert it into the priority queue Q.
-
-
-During window propagation, a pseudo-source window at a saddle
-vertex v (the sum of the incident angles is greater than 2pi) or a
-boundary vertex v can have children: an interval-window child on
-each edge opposite to v and a pseudo-source-window child at each
-vertex adjacent to v, while an interval window on edge e can have at
-most 3 children: two interval-window children on the two edges next
-to e and one pseudo-source-window child at the vertex opposite to e.
-
-*/
-
 // Method to be called to run the algorithm
-void run()
+void GeodesicSolver::run()
 {
 	init();
 	propagate();
@@ -231,7 +181,7 @@ void run()
 }
 
 // Initialize the variables needed for the algorithm
-void init() // O(n log n) for the adjacencies
+void GeodesicSolver::init() // O(n log n) for the adjacencies
 {
         // Init the scalar_field distances to infinity  
     	scalar_field_.resize(mesh_.n_nodes(), DBL_MAX);
@@ -245,7 +195,7 @@ void init() // O(n log n) for the adjacencies
 }
 
 // Deletes what is not neeeded after the algorithm execution
-void dispose()
+void GeodesicSolver::dispose()
 {
     while (!Q_.empty())
     {
@@ -256,7 +206,7 @@ void dispose()
 }
 
 // Main method
-void propagate()
+void GeodesicSolver::propagate()
 {
     // Used to track when all desired destination nodes have been reached during the propagation
     std::set<int> tmp_destinations(destinations_);
@@ -265,13 +215,15 @@ void propagate()
         it != sources_.end(); ++it){
             compute_source_children(it->first, it->second);}
 
-    // decide where to take the next window/ps
-    bool from_ps_q = update_tree_depth_with_choice();
-    // 1) 
+    // Decide where to take the next window/ps
+    bool from_ps_queue = update_tree_depth_with_choice();
+
+    // 1) Main loop:
     while (!P_.empty() || !Q_.empty())
     {
         // 4)
-        if (from_ps_q)
+        // If we take from ps queue:
+        if (from_ps_queue)
         {
             int node_id = P_.top().node_id;
             P_.pop();
@@ -280,113 +232,127 @@ void propagate()
                 return;
             propagate_ps(node_id);
         }
-        else
+        else // We are in window queue:
         {
             priority_window_t w_quote = Q_.top();
             Q_.pop();
             compute_window_children(w_quote);
             delete w_quote.w_pointer;
         }
-        from_ps_q = update_tree_depth_with_choice();
+        from_ps_queue = update_tree_depth_with_choice();
     }
 }
 
-// Given a source and a distance, extends the information related to 
+// Given a src and a distance, extends the information related to 
 // its one-ring, then, creates child intervals
-void compute_source_children(int src_node_id, double dis)
-    {
-		++node_aux_[src_node_id].birth_time;
-		node_aux_[src_node_id].seq_tree_level = 0;
-		node_aux_[src_node_id].ancestor_id = src_node_id;
-		node_aux_[src_node_id].updated_distance = dis;
-
-		int degree = mesh_.nodes_adjacencies_(src_node_id).size();
-		for (int i = 0; i < degree; ++i)
-		{
-			extend_pseudosource(src_node_id, i);
-		}
-
-		for (int i = 0; i < degree; ++i)
-		{
-			create_interval_child_of_pseudosource(src_node_id, i);
-		}
-	}
-
-void extend_pseudosource(int source, int subnode_id)
-	{
-        // TODO: qua edge id è il lato che connette source a subnode_id
-        int edge_id = mesh_.nodes_adjacencies_(source)[subnode_id];
-        const EdgeType& edge = mesh_.edges().row(edge_id);
-        // TODO: right vert non è uno tra source e subnode_id?
-		int index = edge.right_node_id;
-
-		double dis = node_aux_[source].updated_distance + edge.measure();
-
-		if (dis >= node_aux_[index].updated_distance - EPSILON)
-			return;
-		node_aux_[index].parent_is_a_pseudosource = true;
-		++node_aux_[index].birth_time;
-		node_aux_[index].direct_parent_id = source;
-
-		node_aux_[index].seq_tree_level = node_aux_[source].seq_tree_level + 1;
-		node_aux_[index].ancestor_id = node_aux_[source].ancestor_id;
-		node_aux_[index].updated_distance = dis;
-		if (!mesh_.is_node_strongly_convex(index))
-			P_.push(priority_node_t(node_aux_[index].birth_time,
-				index, dis));
-	}
-
-void create_interval_child_of_pseudosource(int source, int incident_edge_subindex, double prop_left= 0, double prop_right = 1)
+void GeodesicSolver::compute_source_children(int src_node_id, double dis)
 {
-    int incident_edge_id = mesh_.nodes_adjacencies_(source)[incident_edge_subindex];
+    // Update the aux struct 
+    ++node_aux_[src_node_id].birth_time;
+    node_aux_[src_node_id].seq_tree_level = 0;
+    node_aux_[src_node_id].ancestor_id = src_node_id;
+    node_aux_[src_node_id].updated_distance = dis;
+    // Get the number of neighbours
+    int n_neigh = this->nodes_adjacencies_[src_node_id].size();
+    // Extend the pseudosource to each of the neghbouring nodes
+    for (int i = 0; i < n_neigh; ++i)
+    {
+        extend_pseudosource(src_node_id, i);
+    }
+    // Compute the children
+    for (int i = 0; i < n_neigh; ++i)
+    {
+        create_interval_child_of_pseudosource(src_node_id, i);
+    }
+}
+// Extends the pseudo-source influence to a neighboring node
+void GeodesicSolver::extend_pseudosource(int src, int neigh_id)
+{
+    // FIX: voglio il lato che connette src e neigh_id
+    int edge_id = this->nodes_adjacencies_[src][neigh_id];
+    const EdgeType& edge = mesh_.edges().row(edge_id);
+    // FIX: quale dei due è right_node_id?
+    int index = edge.right_node_id;
+    // La nuova candidata distanza è quella attuale + misura edge
+    double dis = node_aux_[src].updated_distance + edge.measure();
+    
+    if (dis >= node_aux_[index].updated_distance - EPSILON)
+        return;
+    // Se è minore di quella che arriva a index:
+    // Update the aux struct 
+    node_aux_[index].parent_is_a_pseudosource = true;
+    ++node_aux_[index].birth_time;
+    node_aux_[index].direct_parent_id = src;
+    node_aux_[index].seq_tree_level = node_aux_[src].seq_tree_level + 1;
+    node_aux_[index].ancestor_id = node_aux_[src].ancestor_id;
+    node_aux_[index].updated_distance = dis;
+    // Se il nodo non è strettamente convesso, lo pusho su P
+    if (!mesh_.is_node_strongly_convex(index))
+        P_.push(priority_node_t(node_aux_[index].birth_time,
+            index, dis));
+}
+
+// Creates an interval window [a, b] on an incident edge to a pseudo-source node, 
+// representing part of the wavefront propagation through that edge.
+// Adds the resulting window to the queue if valid.
+void create_interval_child_of_pseudosource(int src, int incident_edge_subindex, double prop_left= 0, double prop_right = 1)
+{
+    int incident_edge_id = this->nodes_adjacencies_[src][incident_edge_subindex];
     if (mesh_.is_edge_on_boundary(incident_edge_id))
         return;
     const EdgeType& edge = mesh_.edges().row(incident_edge_id);
-    // TODO: right edge id
+    // FIX: right edge id?
     const int edge_id = edge.right_edge_id;
+    // Check whether the edge is a boundary edge, in that case stop propagation
     if (mesh_.is_edge_on_boundary(edge_id))
         return;
     priority_window_t w_quote;
     w_quote.w_pointer = new window_t;
     w_quote.w_pointer->proportions[0] = prop_left;
     w_quote.w_pointer->proportions[1] = prop_right;
+    // If the window became too small:
     if (is_too_small(*w_quote.w_pointer))
     {
         delete w_quote.w_pointer;
         return;
     }
+    // Update window information
     w_quote.w_pointer->brach_parent_is_pseudo_source = true;
     w_quote.w_pointer->direct_parent_is_pseudo_source = true;
-    w_quote.w_pointer->parent_birth_time = node_aux_[source].birth_time;
-    w_quote.w_pointer->brach_parent_id = source;
-    w_quote.w_pointer->root_node_id = source;
+    w_quote.w_pointer->parent_birth_time = node_aux_[src].birth_time;
+    w_quote.w_pointer->brach_parent_id = src;
+    w_quote.w_pointer->root_node_id = src;
     w_quote.w_pointer->current_edge_id = edge_id;
-    w_quote.w_pointer->seq_tree_level = node_aux_[source].seq_tree_level + 1;
-    w_quote.w_pointer->ancestor_id = node_aux_[source].ancestor_id;
-    w_quote.w_pointer->distance_to_root = node_aux_[source].updated_distance;
+    w_quote.w_pointer->seq_tree_level = node_aux_[src].seq_tree_level + 1;
+    w_quote.w_pointer->ancestor_id = node_aux_[src].ancestor_id;
+    w_quote.w_pointer->distance_to_root = node_aux_[src].updated_distance;
     w_quote.w_pointer->parent_entry_proportion;
     //TODO: reverse edge id e Edge -> edges() + altra roba sotto
-    int reverse_edge = mesh_.Edge(edge_id).reverse_edge_id;
+    int reverse_edge = mesh_.edges().row(edge_id).reverse_edge_id;
     w_quote.w_pointer->ps_coordinates = reposotion_wrt_edge(reverse_edge,
-        mesh_.Edge(reverse_edge).coordOfOppositeVert,mesh_);
+        mesh_.edges().row(reverse_edge).coordOfOppositeVert,mesh_);
     add_to_windows_queue(w_quote);
 }
 
+// The following methods are to compute windows children:
+
+// Computes and creates the window that results from continuing propagation to the “left child” edge 
+// of the current triangle. Adds this new window to the queue if valid
 void compute_left_child(const window_t& w)
 {
-    //  TODO: serve un metodo che mi dica se l'edge è estremo, ma non dentro triangulation, quindi
-    //  bool is_extreme_edge(mesh,edge)
-    if (is_edge_on_boundary(mesh_, mesh_.Edge(w.current_edge_id).indexOfLeftEdge))
+    //  FIX: questo if va rivisto in luce del paper
+    if (is_edge_on_boundary(mesh_.is_edge_on_boundary(mesh_.Edge(w.current_edge_id).indexOfLeftEdge)))
         return;
 	
     priority_window_t w_quote;
     w_quote.w_pointer = new window_t;
     w_quote.w_pointer->proportions[0] = mesh_.ProportionOnLeftEdgeByImage(w.current_edge_id,
         w.ps_coordinates, w.proportions[0]);
-    w_quote.w_pointer->proportions[0] = max(0., w_quote.w_pointer->proportions[0]);
+    w_quote.w_pointer->proportions[0] = max(0.0, w_quote.w_pointer->proportions[0]);
     w_quote.w_pointer->proportions[1] = mesh_.ProportionOnLeftEdgeByImage(w.current_edge_id,
         w.ps_coordinates, w.proportions[1]);
-    w_quote.w_pointer->proportions[1] = min(1., w_quote.w_pointer->proportions[1]);
+    w_quote.w_pointer->proportions[1] = min(1.0, w_quote.w_pointer->proportions[1]);
+    // If too small
     if (is_too_small(*w_quote.w_pointer))
     {
         delete w_quote.w_pointer;
@@ -397,6 +363,7 @@ void compute_left_child(const window_t& w)
     w_quote.w_pointer->direct_parent_edge_on_left = true;
     w_quote.w_pointer->current_edge_id = mesh_.Edge(w.current_edge_id).indexOfLeftEdge;
     w_quote.w_pointer->distance_to_root = w.distance_to_root;
+    // Rotation due to unfolding
     w_quote.w_pointer->ps_coordinates = mesh_.rotate_around_left_child_edge(w.current_edge_id, w.ps_coordinates);
     w_quote.w_pointer->is_on_left_subtree = w.is_on_left_subtree;
     w_quote.w_pointer->seq_tree_level = w.seq_tree_level + 1;
@@ -405,10 +372,9 @@ void compute_left_child(const window_t& w)
     w_quote.w_pointer->parent_birth_time = w.parent_birth_time;
     w_quote.w_pointer->brach_parent_id = w.brach_parent_id;
     w_quote.w_pointer->root_node_id = w.root_node_id;
-
     add_to_windows_queue(w_quote);
 }
-// TODO: change accordingly to function above
+// Same as above but for right child
 void compute_right_child(const window_t& w)
 {
     if (mesh_.is_edge_on_boundary(mesh_.Edge(w.current_edge_id).right_edge_id))
@@ -432,7 +398,6 @@ void compute_right_child(const window_t& w)
     w_quote.w_pointer->current_edge_id = mesh_.Edge(w.current_edge_id).right_edge_id;
     w_quote.w_pointer->distance_to_root = w.distance_to_root;
     w_quote.w_pointer->ps_coordinates = rotate_around_right_child_edge(w.current_edge_id, w.ps_coordinates, mesh_);
-
     w_quote.w_pointer->seq_tree_level = w.seq_tree_level + 1;
     w_quote.w_pointer->ancestor_id = w.ancestor_id;
     w_quote.w_pointer->parent_birth_time = w.parent_birth_time;
@@ -440,10 +405,12 @@ void compute_right_child(const window_t& w)
     w_quote.w_pointer->root_node_id = w.root_node_id;
     w_quote.w_pointer->is_on_left_subtree = w.is_on_left_subtree;
     w_quote.w_pointer->parent_entry_proportion = w.parent_entry_proportion;
-
     add_to_windows_queue(w_quote);
 }
 
+
+// Similar to compute_left_child but for the case where only a portion (trimmed interval) of the left edge is considered. 
+// This happens when geometric conditions prevent the full interval from being used.
 void compute_only_left_trimmed_child(const window_t& w)
 {
     if (mesh_.is_edge_on_boundary(mesh_.Edge(w.current_edge_id).indexOfLeftEdge))
@@ -478,8 +445,7 @@ void compute_only_left_trimmed_child(const window_t& w)
 } 
 
 
-// Creates a right-side trimmed interval window under constraints similar to compute_only_left_trimmed_child.
-// Used when certain geometric conditions restrict the propagation interval.
+// Like above
 void compute_only_right_trimmed_child(const window_t& w)
 {
     if (mesh_.is_edge_on_boundary(mesh_.Edge(w.current_edge_id).right_edge_id))
@@ -513,6 +479,7 @@ void compute_only_right_trimmed_child(const window_t& w)
     add_to_windows_queue(w_quote);
 }
 
+// Creates a left child interval window considering the presence of a parent window’s influence
 void compute_left_trimmed_child_with_parent(const window_t& w)
 {
     if (mesh_.is_edge_on_boundary(mesh_.Edge(w.current_edge_id).indexOfLeftEdge))
@@ -546,8 +513,7 @@ void compute_left_trimmed_child_with_parent(const window_t& w)
     add_to_windows_queue(w_quote);
 }
 
-// Similar to compute_left_trimmed_child_with_parent, but for the right side. 
-// Adjusts intervals and parent-child relationships in the tree of windowsß
+// Same as above
 void compute_right_trimmed_child_with_parent(const window_t& w)
 {
     if (mesh_.is_edge_on_boundary(mesh_.Edge(w.current_edge_id).right_edge_id))
@@ -583,6 +549,7 @@ void compute_right_trimmed_child_with_parent(const window_t& w)
 }
 
 // Given a parent window, determines the appropriate child windows (left, right, trimmed, etc.) and creates them.
+// Incapsulate the above logic in a unique method
 void compute_window_children(QuoteWindow& quoteParentWindow)
 	{
 		const Window& w = *quoteParentWindow.pWindow;
@@ -590,19 +557,19 @@ void compute_window_children(QuoteWindow& quoteParentWindow)
 		double entryProp = mesh_.ProportionOnEdgeByImage(w.indexOfCurEdge, w.coordOfPseudoSource);
 
 		if (entryProp >= w.proportions[1]
-			|| entryProp >= 1 - LengthTolerance)
+			|| entryProp >= 1 - LENGTH_TOL)
 		{
 			compute_left_child(w);
 			return;
 		}
 
 		if (entryProp <= w.proportions[0]
-			|| entryProp <= LengthTolerance)
+			|| entryProp <= LENGTH_TOL)
 		{
-			ComputeTheOnlyRightChild(w);
+			compute_right_child(w);
 			return;
 		}
-		double disToAngle = model.DistanceToOppositeAngle(w.indexOfCurEdge, w.coordOfPseudoSource);
+		double disToAngle = mesh_.DistanceToOppositeAngle(w.indexOfCurEdge, w.coordOfPseudoSource);
 		int incidentVertex = edge.indexOfOppositeVert;
 		bool fLeftChildToCompute(false), fRightChildToCompute(false);
 		bool fWIsWinning(false);
@@ -616,13 +583,13 @@ void compute_window_children(QuoteWindow& quoteParentWindow)
 		else
 		{
 			if (totalDis < m_InfoAtAngles[w.indexOfCurEdge].disUptodate
-				- 2 * LengthTolerance)
+				- 2 * LENGTH_TOL)
 			{
 				fLeftChildToCompute = fRightChildToCompute = true;
 				fWIsWinning = true;
 			}
 			else if (totalDis < m_InfoAtAngles[w.indexOfCurEdge].disUptodate
-				+ 2 * LengthTolerance)
+				+ 2 * LENGTH_TOL)
 			{
 				fLeftChildToCompute = fRightChildToCompute = true;
 				fWIsWinning = false;
@@ -654,7 +621,7 @@ void compute_window_children(QuoteWindow& quoteParentWindow)
 
 		compute_left_trimmed_child_with_parent(w);
 		compute_right_trimmed_child_with_parent(w);
-		if (totalDis < m_InfoAtVertices[incidentVertex].disUptodate - LengthTolerance)
+		if (totalDis < m_InfoAtVertices[incidentVertex].disUptodate - LENGTH_TOL)
 		{
 			m_InfoAtVertices[incidentVertex].fParentIsPseudoSource = false;
 			++m_InfoAtVertices[incidentVertex].birthTimeForCheckingValidity;
@@ -665,8 +632,8 @@ void compute_window_children(QuoteWindow& quoteParentWindow)
 			m_InfoAtVertices[incidentVertex].disUptodate = totalDis;
 			m_InfoAtVertices[incidentVertex].entryProp = entryProp;
 
-			if (!model.is_node_strongly_convex(incidentVertex))
-				AddIntoQueueOfPseudoSources(QuoteInfoAtVertex(m_InfoAtVertices[incidentVertex].birthTimeForCheckingValidity,
+			if (!mesh_.is_node_strongly_convex(incidentVertex))
+				add_to_windows_queue(QuoteInfoAtVertex(m_InfoAtVertices[incidentVertex].birthTimeForCheckingValidity,
 					incidentVertex, totalDis));
 		}
 	}
@@ -1135,87 +1102,7 @@ void add_to_windows_queue(priority_window_t& w_quote)
     Q_.push(w_quote);
 }
 
-
-// BACKTRACE ATM NOT NEEDED
-
-
-std::vector<EdgePoint> BacktraceShortestPath(int end) const
-{
-    if (m_InfoAtVertices[end].birth_time == -1
-        || m_InfoAtVertices[end].direct_parent_id == -1)
-    {
-        assert(mesh.GetNumOfComponents() != 1 || mesh.Neigh(end).empty());
-        return std::vector<EdgePoint>();
-    }
-    std::vector<EdgePoint> path;
-    std::vector<int> vertexNodes;
-    int index = end;
-    vertexNodes.push_back(index);
-    while (m_InfoAtVertices[index].direct_parent_id != -1)
-    {
-        int indexOfParent = m_InfoAtVertices[index].direct_parent_id;
-        if (m_InfoAtVertices[index].parent_is_a_pseudosource)
-        {
-            index = indexOfParent;
-        }
-        else
-        {
-            index = m_InfoAtVertices[index].root_node_of_direct_parent_id;
-        }
-        vertexNodes.push_back(index);
-    };
-    int src_node_id = index;
-
-    for (int i = 0; i < (int)vertexNodes.size() - 1; ++i)
-    {
-        int lastVert = vertexNodes[i];
-        path.push_back(EdgePoint(lastVert));
-        if (m_InfoAtVertices[lastVert].parent_is_a_pseudosource)
-        {
-            continue;
-        }
-        int parentedge_id = m_InfoAtVertices[lastVert].direct_parent_id;
-        int edge_id = mesh.Edge(parentedge_id).reverse_edge_id;
-        Eigen::Vector2d coord(reposotion_wrt_edge(parentedge_id, mesh.Edge(parentedge_id).coordOfOppositeVert,mesh_));
-
-        double proportion = 1 - m_InfoAtVertices[lastVert].entry_proportion;
-        while (true)
-        {
-            path.push_back(EdgePoint(edge_id, proportion));
-            if (mesh.Edge(edge_id).indexOfOppositeVert == vertexNodes[i + 1])
-                break;
-            double oldprop_rightotion = proportion;
-            proportion = mesh.ProportionOnLeftEdgeByImage(edge_id, coord, oldprop_rightotion);
-            if (abs(proportion - 1) < 1e-2)
-            {
-                vector<EdgePoint> path2 = BacktraceShortestPath(mesh.Edge(edge_id).indexOfOppositeVert);
-                reverse(path.begin(), path.end());
-                copy(path.begin(), path.end(), back_inserter(path2));
-                return path2;
-            }
-            else if (proportion >= 0 && proportion <= 1)
-            {
-                proportion = max(proportion, 0);
-                coord = mesh.rotate_around_left_child_edge(edge_id, coord);
-                edge_id = mesh.Edge(edge_id).indexOfLeftEdge;
-            }
-            else
-            {
-                proportion = mesh.ProportionOnRightEdgeByImage(edge_id, coord, oldprop_rightotion);
-                proportion = max(proportion, 0);
-                proportion = min(proportion, 1);
-                coord = rotate_around_right_child_edge(edge_id, coord,mesh_);
-                edge_id = mesh.Edge(edge_id).right_edge_id;
-            }
-        };
-    }
-    path.push_back(EdgePoint(src_node_id));
-    reverse(path.begin(), path.end());
-    return path;
-}
-
-
-}   // namespace core
-}   // namespace fdapde
+} // namespace core
+} // namespace fdapde
 
 #endif   // __DISTANCE_SOVLER_H__
